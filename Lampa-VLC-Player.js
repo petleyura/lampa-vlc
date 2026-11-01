@@ -1,10 +1,25 @@
 /*!
- * Lampa VLC Player — Stage 2 prototype
+ * Lampa VLC Player — Stage 4.3
  * ---------------------------------------------------------------------------
  * Незалежний HTML5-програвач для Lampa у стилі VLC.
  *
  * Перехоплення: Lampa.Player.listener 'create' -> e.abort() -> власний екран.
  * Штатний плеєр Lampa не створюється взагалі.
+ *
+ * Етап 4.3:
+ *  - TizenAvplayEngine (Samsung AVPlay) через той самий ENGINE_CONTRACT;
+ *  - вибір рушія лише за Lampa.Platform.is('tizen') + webapis.avplay;
+ *  - безпечний fallback AVPlay → HTML5 при фатальній помилці.
+ *
+ * Етап 4.2:
+ *  - спільний контракт рушія (ENGINE_CONTRACT) + Html5Engine;
+ *  - EngineFactory — єдина точка вибору рушія (поки лише HTML5);
+ *  - Player Core (Session) працює лише через контракт, без <video>.
+ *
+ * Етап 4.1:
+ *  - пункт «VLC Player» у налаштуваннях Lampa (player / player_torrent / player_iptv);
+ *  - перехоплення лише коли відповідне налаштування = 'vlc';
+ *  - технічна панель діагностики (VLC PLAYER DEBUG) з реальними метриками HTML5.
  *
  * Залежності: лише публічні об'єкти window.Lampa (без змін файлів Lampa).
  * Ціль: ПК / Chrome / Opera; архітектура готова до Tizen/webOS/Android TV.
@@ -25,13 +40,17 @@
         return;
     }
 
-    var VERSION = '0.2.0';
+    var VERSION = '0.5.0';
 
     var CONFIG = {
         zIndex: 2147483000,
         uiHideDelay: 3000,      // мс бездіяльності до приховування панелі
         seekStep: 10,           // секунд на ArrowLeft / ArrowRight
         autoRetry: 1,           // автоматичних повторів при мережевій помилці
+        debugPanel: true,       // панель діагностики увімкнена під час розробки
+        debugEvents: 14,        // скільки останніх подій тримати в журналі
+        menuOption: 'vlc',      // значення в Storage: player = 'vlc'
+        menuLabel: 'VLC Player',
         debug: /[?&]vlcdebug=1/.test(window.location.search)
     };
 
@@ -139,6 +158,7 @@
 
         '.vlc-video{position:absolute;top:0;left:0;width:100%;height:100%;',
         'object-fit:contain;background:#000;display:block}',
+        '.vlc-avplay{pointer-events:none;background:transparent}',
 
         /* верхня смуга */
         '.vlc-top{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;gap:12px;',
@@ -238,6 +258,21 @@
         '.vlc-action--primary{background:#FF8800;border-color:#FF8800;color:#141414;font-weight:700}',
         '.vlc-action--primary:hover{background:#FFA733}',
 
+        /* технічна панель діагностики */
+        '.vlc-debug{position:absolute;top:58px;left:12px;z-index:6;max-width:340px;padding:8px 10px;',
+        'border-radius:8px;background:rgba(10,10,10,.72);border:1px solid rgba(255,136,0,.25);',
+        'color:#d6d6d6;font:10px/1.45 Consolas,"Courier New",monospace;pointer-events:none;',
+        'letter-spacing:.2px;text-align:left;box-shadow:0 6px 18px rgba(0,0,0,.35);',
+        '-webkit-user-select:none;user-select:none}',
+        '.vlc-debug__title{color:#FF8800;font-weight:700;letter-spacing:1px;margin-bottom:5px}',
+        '.vlc-debug__row{display:flex;gap:8px;justify-content:space-between;white-space:nowrap}',
+        '.vlc-debug__row>span{color:#8f8f8f}',
+        '.vlc-debug__row>b{color:#eee;font-weight:600;overflow:hidden;text-overflow:ellipsis;max-width:190px}',
+        '.vlc-debug__log-title{color:#FF8800;margin:6px 0 3px;font-weight:700;letter-spacing:.8px}',
+        '.vlc-debug__log{max-height:116px;overflow:hidden}',
+        '.vlc-debug__log>div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#bdbdbd}',
+        '.vlc-debug__log>div>b{color:#7f7f7f;font-weight:400;margin-right:4px}',
+
         /* дрібні екрани */
         '@media (max-width:720px){',
         '.vlc-title{display:none}',
@@ -247,6 +282,8 @@
         '.vlc-btn .vlc-ico{width:19px;height:19px}',
         '.vlc-settings{right:10px;left:10px;width:auto;bottom:74px}',
         '.vlc-error{margin:0 12px;padding:18px}',
+        '.vlc-debug{top:44px;left:8px;max-width:240px;font-size:9px}',
+        '.vlc-debug__row>b{max-width:130px}',
         '}',
 
         'body.vlc-open{overflow:hidden !important}'
@@ -331,14 +368,23 @@
     /* =====================================================================
      * 5. Engine: HTML5 Video
      * ---------------------------------------------------------------------
-     * Контракт (майбутні AVPlay/webOS реалізують той самий набір):
-     *   mount(container), load(url), play(), pause(), toggle(), seek(t),
-     *   seekBy(d), setRate(r), currentTime(), duration(), paused(),
-     *   buffered(), videoSize(), destroy()
-     * UI не знає, який саме рушій усередині.
+     * Спільний контракт рушія (реалізують Html5Engine, майбутні AVPlay/webOS):
+     *   name, mount(container, before), load(url), play(), pause(), toggle(),
+     *   seek(time), seekBy(delta), setRate(rate), time(), duration(), paused(),
+     *   rate(), buffered(), videoSize(), audioTracks(), selectAudio(index),
+     *   subtitleTracks(), selectSubtitle(index), setSubtitleDelay(value),
+     *   capabilities(), destroy()
+     * UI і Player Core не знають, який саме рушій усередині.
      * ===================================================================== */
 
-    function createHtml5Engine(hooks) {
+    var ENGINE_CONTRACT = [
+        'mount', 'load', 'play', 'pause', 'toggle', 'seek', 'setRate',
+        'time', 'duration', 'buffered', 'videoSize',
+        'audioTracks', 'selectAudio', 'subtitleTracks', 'selectSubtitle',
+        'setSubtitleDelay', 'destroy'
+    ];
+
+    function Html5Engine(hooks) {
         var video = el('video', 'vlc-video');
 
         video.setAttribute('playsinline', 'playsinline');
@@ -407,10 +453,32 @@
         bind();
 
         var api = {
+            name: 'HTML5',
             el: video,
 
-            mount: function (container) {
-                container.appendChild(video);
+            /**
+             * Реальні можливості поточного браузера (не «фіктивні» прапорці).
+             * audioTracks у Chromium зазвичай відсутній — тоді false.
+             */
+            capabilities: function () {
+                var audio = false;
+                var subs = false;
+
+                try { audio = !!(video.audioTracks && video.audioTracks.length); } catch (e) { audio = false; }
+                try { subs = !!(video.textTracks && video.textTracks.length); } catch (e) { subs = false; }
+
+                return {
+                    audioTracks: audio,
+                    subtitleTracks: subs,
+                    subtitleDelay: false,
+                    rate: true,
+                    seek: true
+                };
+            },
+
+            mount: function (container, before) {
+                if (before && before.parentNode === container) container.insertBefore(video, before);
+                else container.appendChild(video);
             },
 
             load: function (url) {
@@ -468,6 +536,7 @@
             },
 
             currentTime: function () { return video.currentTime || 0; },
+            time: function () { return video.currentTime || 0; },
             duration: function () { return video.duration; },
             paused: function () { return video.paused; },
             rate: function () { return video.playbackRate; },
@@ -488,6 +557,99 @@
 
             videoSize: function () {
                 return { width: video.videoWidth || 0, height: video.videoHeight || 0 };
+            },
+
+            /**
+             * Аудіодоріжки HTML5.
+             * @returns {Array|null} null — API недоступне або доріжок немає
+             * (Chromium зазвичай не реалізує HTMLMediaElement.audioTracks).
+             */
+            audioTracks: function () {
+                try {
+                    var list = video.audioTracks;
+                    if (!list || !list.length) return null;
+
+                    var out = [];
+
+                    for (var i = 0; i < list.length; i++) {
+                        out.push({
+                            index: i,
+                            label: list[i].label || list[i].language || ('Track ' + (i + 1)),
+                            language: list[i].language || '',
+                            enabled: !!list[i].enabled
+                        });
+                    }
+
+                    return out;
+                } catch (e) {
+                    return null;
+                }
+            },
+
+            /**
+             * @returns {boolean} true лише якщо доріжку реально перемкнено.
+             */
+            selectAudio: function (index) {
+                try {
+                    var list = video.audioTracks;
+                    if (!list || !list.length || !list[index]) return false;
+
+                    for (var i = 0; i < list.length; i++) list[i].enabled = (i === index);
+
+                    return true;
+                } catch (e) {
+                    return false;
+                }
+            },
+
+            /**
+             * Субтитри, підключені до <video> (WebVTT через <track>).
+             * @returns {Array} порожній масив, якщо доріжок немає
+             */
+            subtitleTracks: function () {
+                try {
+                    var list = video.textTracks;
+                    if (!list || !list.length) return [];
+
+                    var out = [];
+
+                    for (var i = 0; i < list.length; i++) {
+                        out.push({
+                            index: i,
+                            label: list[i].label || list[i].language || ('Subtitle ' + (i + 1)),
+                            language: list[i].language || '',
+                            mode: list[i].mode
+                        });
+                    }
+
+                    return out;
+                } catch (e) {
+                    return [];
+                }
+            },
+
+            /**
+             * @returns {boolean} true лише якщо субтитри реально перемкнено.
+             */
+            selectSubtitle: function (index) {
+                try {
+                    var list = video.textTracks;
+                    if (!list || !list.length || !list[index]) return false;
+
+                    for (var i = 0; i < list.length; i++) list[i].mode = (i === index ? 'showing' : 'disabled');
+
+                    return true;
+                } catch (e) {
+                    return false;
+                }
+            },
+
+            /**
+             * HTML5 не має нативного зсуву субтитрів — повертаємо false,
+             * щоб UI не показував фіктивну підтримку.
+             */
+            setSubtitleDelay: function () {
+                return false;
             },
 
             destroy: function () {
@@ -514,6 +676,524 @@
 
         return api;
     }
+
+    /* =====================================================================
+     * 5.0. Tizen AVPlay Engine
+     * ---------------------------------------------------------------------
+     * Використовується ЛИШЕ коли Lampa.Platform.is('tizen') І доступний
+     * webapis.avplay з потрібними методами. У звичайному браузері не
+     * активується навіть при схожому User-Agent.
+     *
+     * Відео виводиться в <object type="application/avplayer">; координати
+     * setDisplayRect завжди в системі 1920×1080 (вимога Samsung).
+     * ===================================================================== */
+
+    var AVPLAY_REQUIRED = [
+        'open', 'close', 'prepareAsync', 'play', 'pause', 'stop', 'seekTo',
+        'getDuration', 'getCurrentTime', 'setListener', 'setDisplayRect',
+        'setSpeed'
+    ];
+
+    // Методи доріжок не є критичними для відтворення — перевіряємо окремо.
+    var AVPLAY_TRACK_METHODS = ['getTotalTrackInfo', 'setSelectTrack'];
+
+    function hasAvplayTracks(av) {
+        var api = av || (window.webapis && window.webapis.avplay);
+
+        if (!api) return false;
+
+        for (var i = 0; i < AVPLAY_TRACK_METHODS.length; i++) {
+            if (typeof api[AVPLAY_TRACK_METHODS[i]] !== 'function') return false;
+        }
+
+        return true;
+    }
+
+    function isAvplayAvailable() {
+        var av = window.webapis && window.webapis.avplay;
+
+        if (!av) return false;
+
+        for (var i = 0; i < AVPLAY_REQUIRED.length; i++) {
+            if (typeof av[AVPLAY_REQUIRED[i]] !== 'function') return false;
+        }
+
+        return true;
+    }
+
+    function avplayErrorText(error) {
+        if (!error) return 'unknown';
+        if (typeof error === 'string') return error;
+
+        return error.message || error.errorText || ('code ' + (error.code !== undefined ? error.code : error.errorCode));
+    }
+
+    var avplayCurrent = null;
+
+    function TizenAvplayEngine(hooks) {
+        var av = window.webapis ? window.webapis.avplay : null;
+
+        var object = el('object', 'vlc-video vlc-avplay');
+        object.setAttribute('type', 'application/avplayer');
+        object.setAttribute('aria-hidden', 'true');
+
+        var destroyed = false;
+        var opened = false;
+        var prepared = false;
+        var state = 'none'; // none | idle | preparing | ready | playing | paused
+        var paused = true;
+        var rate = 1;
+        var size = { width: 0, height: 0, time: 0 };
+        var resizeTimer = null;
+
+        function fail(code, message) {
+            if (destroyed) return;
+            hooks.onError(code, message, true);
+        }
+
+        function applyDisplayRect() {
+            if (!av || destroyed || !opened) return;
+
+            try {
+                // Для AVPlay екран завжди 1920×1080, незалежно від вікна.
+                av.setDisplayRect(0, 0, 1920, 1080);
+            } catch (e) { /* не критично */ }
+
+            try {
+                if (typeof av.setDisplayMethod === 'function') {
+                    av.setDisplayMethod('PLAYER_DISPLAY_MODE_LETTER_BOX');
+                }
+            } catch (e) { /* не критично */ }
+        }
+
+        function closeInternal() {
+            if (!av) return;
+
+            try {
+                if (opened) av.stop();
+            } catch (e) { /* ignore */ }
+
+            try {
+                av.close();
+            } catch (e) { /* ignore */ }
+
+            opened = false;
+            prepared = false;
+            state = 'none';
+        }
+
+        function bindListener() {
+            if (!av || typeof av.setListener !== 'function') return;
+
+            try {
+                av.setListener({
+                    onbufferingstart: function () {
+                        if (destroyed) return;
+                        hooks.onWaiting(true);
+                    },
+                    onbufferingprogress: function () {
+                        if (destroyed) return;
+                        hooks.onProgress();
+                    },
+                    onbufferingcomplete: function () {
+                        if (destroyed) return;
+                        hooks.onWaiting(false);
+                    },
+                    oncurrentplaytime: function () {
+                        if (destroyed) return;
+                        hooks.onTime();
+                    },
+                    onstreamcompleted: function () {
+                        if (destroyed) return;
+                        state = 'ready';
+                        paused = true;
+                        hooks.onEnded();
+                    },
+                    onerror: function (type) {
+                        fail(105, 'AVPlay error: ' + (type || 'unknown'));
+                    },
+                    onevent: function () {},
+                    onsubtitlechange: function () {},
+                    ondrmevent: function () {}
+                });
+            } catch (e) {
+                fail(106, 'setListener() failed: ' + avplayErrorText(e));
+            }
+        }
+
+        function tracks(type) {
+            if (!av || !prepared || !hasAvplayTracks(av)) return null;
+            if (['ready', 'playing', 'paused'].indexOf(state) === -1) return null;
+
+            try {
+                var info = av.getTotalTrackInfo();
+                if (!info || !info.length) return [];
+
+                var out = [];
+
+                for (var i = 0; i < info.length; i++) {
+                    if (info[i].type !== type) continue;
+
+                    var extra = {};
+
+                    try { extra = JSON.parse(info[i].extra_info || '{}'); } catch (e) { extra = {}; }
+
+                    out.push({
+                        index: parseInt(info[i].index, 10),
+                        label: extra.language || extra.track_lang || ((type === 'AUDIO' ? 'Audio ' : 'Subtitle ') + info[i].index),
+                        language: extra.language || extra.track_lang || '',
+                        extra: extra
+                    });
+                }
+
+                return out;
+            } catch (e) {
+                return null;
+            }
+        }
+
+        function onResize() {
+            clearTimeout(resizeTimer);
+            resizeTimer = setTimeout(function () {
+                if (!destroyed) applyDisplayRect();
+            }, 200);
+        }
+
+        var api = {
+            name: 'Tizen AVPlay',
+            el: object,
+
+            capabilities: function () {
+                var trackApi = hasAvplayTracks(av);
+
+                return {
+                    audioTracks: trackApi,
+                    subtitleTracks: trackApi,
+                    subtitleDelay: !!(av && typeof av.setSubtitlePosition === 'function'),
+                    rate: true,
+                    seek: true
+                };
+            },
+
+            mount: function (container, before) {
+                if (before && before.parentNode === container) container.insertBefore(object, before);
+                else container.appendChild(object);
+
+                applyDisplayRect();
+
+                window.addEventListener('resize', onResize, false);
+            },
+
+            load: function (url) {
+                if (destroyed) return;
+
+                if (!av) {
+                    fail(100, 'webapis.avplay недоступний');
+                    return;
+                }
+
+                closeInternal();
+
+                state = 'idle';
+                paused = true;
+                rate = 1;
+
+                try {
+                    av.open(url);
+                    opened = true;
+                } catch (e) {
+                    fail(101, 'open() failed: ' + avplayErrorText(e));
+                    return;
+                }
+
+                bindListener();
+                applyDisplayRect();
+
+                state = 'preparing';
+
+                try {
+                    av.prepareAsync(function () {
+                        if (destroyed) return;
+
+                        prepared = true;
+                        state = 'ready';
+
+                        hooks.onMeta();
+
+                        try {
+                            av.play();
+                            state = 'playing';
+                            paused = false;
+                            hooks.onPlayState();
+                            hooks.onPlaying();
+                        } catch (e) {
+                            fail(103, 'play() failed: ' + avplayErrorText(e));
+                        }
+                    }, function (error) {
+                        fail(102, 'prepareAsync() failed: ' + avplayErrorText(error));
+                    });
+                } catch (e) {
+                    fail(102, 'prepareAsync() failed: ' + avplayErrorText(e));
+                }
+            },
+
+            play: function () {
+                if (destroyed || !av || !prepared) return;
+
+                if (['ready', 'paused', 'playing'].indexOf(state) === -1) return;
+
+                try {
+                    av.play();
+                    state = 'playing';
+                    paused = false;
+                    hooks.onPlayState();
+                } catch (e) {
+                    fail(103, 'play() failed: ' + avplayErrorText(e));
+                }
+            },
+
+            pause: function () {
+                if (destroyed || !av || !prepared) return;
+
+                if (['playing', 'paused'].indexOf(state) === -1) return;
+
+                try {
+                    av.pause();
+                    state = 'paused';
+                    paused = true;
+                    hooks.onPlayState();
+                } catch (e) {
+                    fail(104, 'pause() failed: ' + avplayErrorText(e));
+                }
+            },
+
+            toggle: function () {
+                if (state === 'playing') api.pause();
+                else api.play();
+            },
+
+            seek: function (time) {
+                if (destroyed || !av || !prepared) return;
+
+                if (['ready', 'playing', 'paused'].indexOf(state) === -1) return;
+
+                var duration = api.duration();
+                var target = (isFinite(duration) && duration > 0) ? clamp(time, 0, duration) : Math.max(0, time);
+
+                try {
+                    av.seekTo(Math.round(target * 1000));
+                    hooks.onTime();
+                } catch (e) {
+                    fail(104, 'seekTo() failed: ' + avplayErrorText(e));
+                }
+            },
+
+            seekBy: function (delta) {
+                api.seek(api.time() + delta);
+            },
+
+            setRate: function (value) {
+                if (destroyed || !av || !prepared) return false;
+
+                if (['ready', 'playing', 'paused'].indexOf(state) === -1) return false;
+
+                try {
+                    av.setSpeed(value);
+                    rate = value;
+                    return true;
+                } catch (e) {
+                    return false;
+                }
+            },
+
+            time: function () {
+                if (!av || !opened) return 0;
+
+                try {
+                    return (av.getCurrentTime() || 0) / 1000;
+                } catch (e) {
+                    return 0;
+                }
+            },
+
+            duration: function () {
+                if (!av || !opened) return NaN;
+
+                try {
+                    var value = av.getDuration() || 0;
+                    return value > 0 ? value / 1000 : NaN;
+                } catch (e) {
+                    return NaN;
+                }
+            },
+
+            paused: function () {
+                return paused;
+            },
+
+            rate: function () {
+                return rate;
+            },
+
+            /**
+             * AVPlay не надає інтерфейсу buffered ranges, тому повертаємо 0.
+             * Debug Panel покаже N/A — це чесніше, ніж вигадані секунди.
+             */
+            buffered: function () {
+                return 0;
+            },
+
+            videoSize: function () {
+                var now = Date.now();
+
+                if (now - size.time < 2000) return { width: size.width, height: size.height };
+
+                size.time = now;
+
+                if (!av || !prepared || typeof av.getCurrentStreamInfo !== 'function') {
+                    return { width: size.width, height: size.height };
+                }
+
+                try {
+                    var info = av.getCurrentStreamInfo();
+
+                    if (info) {
+                        for (var i = 0; i < info.length; i++) {
+                            if (info[i].type !== 'VIDEO') continue;
+
+                            var extra = JSON.parse(info[i].extra_info || '{}');
+                            size.width = extra.width || extra.Width || 0;
+                            size.height = extra.height || extra.Height || 0;
+                        }
+                    }
+                } catch (e) { /* ignore */ }
+
+                return { width: size.width, height: size.height };
+            },
+
+            audioTracks: function () {
+                return tracks('AUDIO');
+            },
+
+            selectAudio: function (index) {
+                var list = tracks('AUDIO');
+
+                if (!list || !list.length) return false;
+
+                for (var i = 0; i < list.length; i++) {
+                    if (list[i].index !== index) continue;
+
+                    try {
+                        av.setSelectTrack('AUDIO', index);
+                        return true;
+                    } catch (e) {
+                        return false;
+                    }
+                }
+
+                return false;
+            },
+
+            subtitleTracks: function () {
+                return tracks('TEXT') || [];
+            },
+
+            selectSubtitle: function (index) {
+                var list = tracks('TEXT');
+
+                if (!list || !list.length) return false;
+
+                for (var i = 0; i < list.length; i++) {
+                    if (list[i].index !== index) continue;
+
+                    try {
+                        av.setSelectTrack('TEXT', index);
+                        return true;
+                    } catch (e) {
+                        return false;
+                    }
+                }
+
+                return false;
+            },
+
+            setSubtitleDelay: function (value) {
+                if (!av || !prepared || ['playing', 'paused'].indexOf(state) === -1) return false;
+
+                try {
+                    av.setSubtitlePosition(value);
+                    return true;
+                } catch (e) {
+                    return false;
+                }
+            },
+
+            destroy: function () {
+                destroyed = true;
+
+                clearTimeout(resizeTimer);
+                window.removeEventListener('resize', onResize, false);
+
+                if (av) {
+                    try { if (opened) av.stop(); } catch (e) { /* ignore */ }
+                    try { av.close(); } catch (e) { /* ignore */ }
+                }
+
+                opened = false;
+                prepared = false;
+                state = 'none';
+
+                if (object.parentNode) object.parentNode.removeChild(object);
+
+                if (avplayCurrent === api) avplayCurrent = null;
+
+                api.el = null;
+            }
+        };
+
+        // Захист від двох одночасних AVPlay-сесій (webapis.avplay — синглтон).
+        if (avplayCurrent && avplayCurrent !== api) {
+            safe(function () { avplayCurrent.destroy(); });
+        }
+
+        avplayCurrent = api;
+
+        return api;
+    }
+
+    /* =====================================================================
+     * 5.1. Engine Factory
+     * ---------------------------------------------------------------------
+     * Єдина точка вибору рушія. HTML5 — завжди доступний fallback.
+     * ===================================================================== */
+
+    var EngineFactory = {
+        engines: {
+            html5: Html5Engine,
+            'tizen-avplay': TizenAvplayEngine
+        },
+
+        platformId: function () {
+            var Platform = window.Lampa && window.Lampa.Platform;
+            var tizen = !!(Platform && typeof Platform.is === 'function' && Platform.is('tizen'));
+
+            // Лише Tizen + реальний AVPlay. User-Agent не використовується.
+            if (tizen && isAvplayAvailable()) return 'tizen-avplay';
+
+            return 'html5';
+        },
+
+        create: function (hooks, session, forcedId) {
+            var id = forcedId || EngineFactory.platformId(session);
+            var factory = EngineFactory.engines[id] || Html5Engine;
+
+            var engine = factory(hooks);
+
+            log('engine created:', engine.name || id);
+
+            return engine;
+        }
+    };
 
     /* =====================================================================
      * 6. UI: повноекранний контейнер у стилі VLC
@@ -586,6 +1266,21 @@
                     '<button type="button" class="vlc-rate" data-rate="1.5">1.5×</button>',
                     '<button type="button" class="vlc-rate" data-rate="2">2×</button>',
                 '</div>',
+            '</div>',
+
+            '<div class="vlc-debug" aria-hidden="true">',
+                '<div class="vlc-debug__title">VLC PLAYER DEBUG</div>',
+                '<div class="vlc-debug__row"><span>STATE</span><b data-d="state">INITIALIZING</b></div>',
+                '<div class="vlc-debug__row"><span>SOURCE</span><b data-d="source">UNKNOWN</b></div>',
+                '<div class="vlc-debug__row"><span>TIME</span><b data-d="time">N/A</b></div>',
+                '<div class="vlc-debug__row"><span>DURATION</span><b data-d="duration">N/A</b></div>',
+                '<div class="vlc-debug__row"><span>RESOLUTION</span><b data-d="resolution">N/A</b></div>',
+                '<div class="vlc-debug__row"><span>DOWNLOAD</span><b data-d="speed">N/A</b></div>',
+                '<div class="vlc-debug__row"><span>BUFFER</span><b data-d="buffer">N/A</b></div>',
+                '<div class="vlc-debug__row"><span>ENGINE</span><b data-d="engine">HTML5</b></div>',
+                '<div class="vlc-debug__row"><span>LAST ERROR</span><b data-d="error">—</b></div>',
+                '<div class="vlc-debug__log-title">EVENTS</div>',
+                '<div class="vlc-debug__log" data-d="log"></div>',
             '</div>'
         ].join('');
 
@@ -610,7 +1305,8 @@
             infoEngine: root.querySelector('[data-info="engine"]'),
             infoSize: root.querySelector('[data-info="size"]'),
             infoBuffer: root.querySelector('[data-info="buffer"]'),
-            infoSource: root.querySelector('[data-info="source"]')
+            infoSource: root.querySelector('[data-info="source"]'),
+            debug: root.querySelector('.vlc-debug')
         };
 
         var hideTimer = null;
@@ -856,6 +1552,181 @@
     }
 
     /* =====================================================================
+     * 6.1. Debug Panel
+     * ---------------------------------------------------------------------
+     * Панель лише відображає те, що реально доступно в HTML5-рушії.
+     * Немає даних — показуємо N/A. Оцінка швидкості позначається ESTIMATED.
+     * Будь-яка помилка панелі не повинна впливати на відтворення, тому всі
+     * виклики з боку сесії йдуть через safe().
+     * ===================================================================== */
+
+    function createDebugPanel(root) {
+        if (!root) return null;
+
+        var fields = {};
+        var nodes = root.querySelectorAll('[data-d]');
+
+        for (var i = 0; i < nodes.length; i++) {
+            var key = nodes[i].getAttribute('data-d');
+            if (key) fields[key] = nodes[i];
+        }
+
+        var logNode = fields.log || null;
+        delete fields.log;
+
+        var disposed = false;
+
+        function set(name, value) {
+            if (disposed) return;
+
+            var node = fields[name];
+            if (!node) return;
+
+            var text = (value === undefined || value === null || value === '') ? 'N/A' : String(value);
+
+            try { node.textContent = text; } catch (e) { /* ignore */ }
+        }
+
+        function timeStamp() {
+            var d = new Date();
+            return pad2(d.getHours()) + ':' + pad2(d.getMinutes()) + ':' + pad2(d.getSeconds());
+        }
+
+        return {
+            el: root,
+
+            set: set,
+
+            setState: function (state) {
+                set('state', state);
+            },
+
+            setSource: function (source) {
+                set('source', source || 'UNKNOWN');
+            },
+
+            setEngine: function (engine) {
+                set('engine', engine || 'N/A');
+            },
+
+            setError: function (code, text) {
+                if (disposed) return;
+
+                if (!code) {
+                    set('error', '—');
+                    return;
+                }
+
+                set('error', code + ' · ' + (text || 'unknown'));
+            },
+
+            event: function (text) {
+                if (disposed || !logNode || !text) return;
+
+                try {
+                    var row = document.createElement('div');
+                    var stamp = document.createElement('b');
+
+                    stamp.textContent = timeStamp();
+                    row.appendChild(stamp);
+                    row.appendChild(document.createTextNode(text));
+
+                    logNode.insertBefore(row, logNode.firstChild);
+
+                    while (logNode.childNodes.length > CONFIG.debugEvents) {
+                        logNode.removeChild(logNode.lastChild);
+                    }
+                } catch (e) { /* панель не повинна ламати плеєр */ }
+            },
+
+            dispose: function () {
+                disposed = true;
+                logNode = null;
+                fields = {};
+            }
+        };
+    }
+
+    function dbg(s, method) {
+        if (!s || !s.debug || typeof s.debug[method] !== 'function') return;
+
+        var args = Array.prototype.slice.call(arguments, 2);
+
+        safe(function () {
+            s.debug[method].apply(s.debug, args);
+        });
+    }
+
+    /**
+     * Тип джерела для діагностики.
+     * @param {object} data
+     * @param {string} url
+     * @returns {string} LINK | TorrServer | IPTV | UNKNOWN
+     */
+    function detectSource(data, url) {
+        if (data && data.iptv) return 'IPTV';
+        if (data && (data.torrent_hash || data.torrent)) return 'TorrServer';
+
+        if (typeof url === 'string') {
+            if (/\/stream\/|\/gst\//.test(url)) return 'TorrServer';
+            if (/^https?:\/\//i.test(url)) return 'LINK';
+            if (/^magnet:/i.test(url)) return 'TorrServer';
+        }
+
+        return 'UNKNOWN';
+    }
+
+    /**
+     * Оцінка швидкості наповнення буфера: скільки секунд відео додається
+     * за одну секунду реального часу. Це НЕ бітрейт і не швидкість мережі —
+     * тому в панелі таке значення позначається як ESTIMATED.
+     */
+    function createSpeedMeter() {
+        var lastTime = 0;
+        var lastBuffered = 0;
+        var ema = 0;
+        var samples = 0;
+
+        return {
+            reset: function () {
+                lastTime = 0;
+                lastBuffered = 0;
+                ema = 0;
+                samples = 0;
+            },
+
+            sample: function (bufferedEnd) {
+                var now = Date.now();
+
+                if (!lastTime) {
+                    lastTime = now;
+                    lastBuffered = bufferedEnd;
+                    return null;
+                }
+
+                var dt = (now - lastTime) / 1000;
+                var db = bufferedEnd - lastBuffered;
+
+                if (dt >= 0.7) {
+                    if (db > 0 && dt > 0) {
+                        var value = db / dt;
+
+                        if (value > 0 && value < 60) {
+                            ema = ema ? (ema * 0.7 + value * 0.3) : value;
+                            samples++;
+                        }
+                    }
+
+                    lastTime = now;
+                    lastBuffered = bufferedEnd;
+                }
+
+                return samples >= 2 ? ema : null;
+            }
+        };
+    }
+
+    /* =====================================================================
      * 7. Session: життєвий цикл сесії
      * ===================================================================== */
 
@@ -884,7 +1755,18 @@
                 resizeHandler: null,
                 ended: false,
                 errorCode: 0,
-                destroying: false
+                destroying: false,
+                debug: null,
+                debugTimer: null,
+                sourceType: 'UNKNOWN',
+                buffering: false,
+                metaLogged: false,
+                startedLogged: false,
+                pausedLogged: false,
+                lastError: null,
+                fallbackUsed: false,
+                hooks: null,
+                speedMeter: createSpeedMeter()
             };
 
             var s = session;
@@ -892,6 +1774,16 @@
             s.ui = createUI(s);
             document.body.appendChild(s.ui.root);
             document.body.classList.add('vlc-open');
+
+            if (CONFIG.debugPanel) {
+                s.debug = safe(function () { return createDebugPanel(s.ui.refs.debug); });
+
+                if (s.debug) {
+                    s.debug.setSource(detectSource(data, url));
+                    s.debug.setState('INITIALIZING');
+                    s.debug.event('Player initialized');
+                }
+            }
 
             s.prevBodyOverflow = document.body.style.overflow;
             document.body.style.overflow = 'hidden';
@@ -904,18 +1796,24 @@
                 onProgress: function () { onProgress(s); },
                 onPlaying: function () { onPlaying(s); },
                 onPlayState: function () { onPlayState(s); },
-                onWaiting: function (on) { if (s.ui) s.ui.setLoading(on); },
+                onWaiting: function (on) { onWaiting(s, on); },
                 onEnded: function () { onEnded(s); },
-                onError: function (code) { onError(s, code); },
+                onError: function (code, text, fatal) { onError(s, code, text, fatal); },
                 onRate: function (rate) { if (s.ui) s.ui.setActiveRate(rate); },
-                onAutoplayBlocked: function () { if (s.ui) s.ui.setBigPlay(true); }
+                onAutoplayBlocked: function () {
+                    if (s.ui) s.ui.setBigPlay(true);
+                    dbg(s, 'event', 'Autoplay blocked by browser');
+                }
             };
 
-            s.engine = createHtml5Engine(hooks);
-            s.engine.mount(s.ui.root);
+            s.hooks = hooks;
 
-            // Відео має бути ПІД шаром керування: переносимо його на початок root.
-            s.ui.root.insertBefore(s.engine.el, s.ui.root.firstChild);
+            s.engine = EngineFactory.create(hooks, s);
+
+            // Відео має бути ПІД шаром керування: монтуємо перед першим елементом UI.
+            s.engine.mount(s.ui.root, s.ui.root.firstChild);
+
+            dbg(s, 'setEngine', s.engine.name || 'N/A');
 
             bindControls(s);
             bindRemote(s);
@@ -926,8 +1824,18 @@
             s.ui.setPlayState(true);
             s.ui.show();
 
+            dbg(s, 'event', 'Stream URL received');
+            dbg(s, 'setState', 'LOADING');
+            dbg(s, 'event', 'Video loading started');
+
             log('open session', url);
             s.engine.load(url);
+
+            // Оновлення панелі незалежно від подій рушія (таймкод/буфер).
+            s.debugTimer = setInterval(function () {
+                if (!session || session !== s) return;
+                safe(function () { refreshDebug(s); });
+            }, 1000);
         },
 
         close: function (reason, silent) {
@@ -939,6 +1847,11 @@
             log('close session:', reason || 'user');
 
             s.destroying = true;
+
+            if (s.debugTimer) {
+                clearInterval(s.debugTimer);
+                s.debugTimer = null;
+            }
 
             // 1. Зберегти прогрес до знищення рушія
             saveProgress(s);
@@ -954,8 +1867,10 @@
 
             if (s.ui) {
                 safe(function () { s.ui.dispose(); });
+                safe(function () { s.debug && s.debug.dispose(); });
                 safe(function () { s.ui.root.parentNode && s.ui.root.parentNode.removeChild(s.ui.root); });
                 s.ui = null;
+                s.debug = null;
             }
 
             // 4. Відновити стан сторінки
@@ -1009,6 +1924,46 @@
         return String(title).replace(/<[^>]*>?/gm, '');
     }
 
+    function setDebugState(s, state) {
+        if (!s || s.debugState === state) return;
+
+        s.debugState = state;
+        dbg(s, 'setState', state);
+    }
+
+    /**
+     * Оновлення реальних метрик HTML5-рушія в панелі.
+     * Нічого не вигадуємо: якщо даних немає — N/A.
+     */
+    function refreshDebug(s) {
+        if (!s || !s.debug || !s.engine) return;
+
+        // Діагностика не повинна ламати відтворення навіть у разі помилки.
+        try {
+            var time = s.engine.time();
+            var duration = s.engine.duration();
+            var size = s.engine.videoSize();
+            var bufferedEnd = s.engine.buffered();
+
+            s.debug.set('time', isFinite(time) ? formatTime(time) : 'N/A');
+            s.debug.set('duration', (isFinite(duration) && duration > 0) ? formatTime(duration) : 'N/A');
+            s.debug.set('resolution', (size && size.width > 0 && size.height > 0) ? (size.width + '×' + size.height) : 'N/A');
+
+            var ahead = 0;
+            if (isFinite(bufferedEnd) && bufferedEnd > 0) ahead = Math.max(0, bufferedEnd - time);
+
+            if (ahead > 0) s.debug.set('buffer', ahead.toFixed(1) + ' s');
+            else s.debug.set('buffer', bufferedEnd > 0 ? '0.0 s' : 'N/A');
+
+            // Швидкість — лише оцінка наповнення буфера (секунди відео / секунду часу).
+            var rate = null;
+            if (!s.engine.paused() && bufferedEnd > 0) rate = s.speedMeter.sample(bufferedEnd);
+            s.debug.set('speed', rate ? '≈' + rate.toFixed(2) + '× (ESTIMATED)' : 'N/A');
+        } catch (e) {
+            warn('debug refresh failed:', e && e.message ? e.message : e);
+        }
+    }
+
     function onMeta(s) {
         if (!s.ui || !s.engine) return;
 
@@ -1017,21 +1972,50 @@
 
         s.ui.setLive(live);
         s.ui.setSize(s.engine.videoSize());
-        s.ui.setTime(s.engine.currentTime(), duration);
-        s.ui.setProgress(s.engine.currentTime(), duration, s.engine.buffered());
+        s.ui.setTime(s.engine.time(), duration);
+        s.ui.setProgress(s.engine.time(), duration, s.engine.buffered());
+
+        if (!s.metaLogged) {
+            s.metaLogged = true;
+            dbg(s, 'event', 'Metadata loaded');
+        }
+
+        refreshDebug(s);
     }
 
     function onTime(s) {
         if (!s.ui || !s.engine) return;
 
         var duration = s.engine.duration();
-        s.ui.setTime(s.engine.currentTime(), duration);
-        s.ui.setProgress(s.engine.currentTime(), duration, s.engine.buffered());
+        s.ui.setTime(s.engine.time(), duration);
+        s.ui.setProgress(s.engine.time(), duration, s.engine.buffered());
+
+        refreshDebug(s);
     }
 
     function onProgress(s) {
         if (!s.ui || !s.engine) return;
-        s.ui.setBuffer(s.engine.buffered() - s.engine.currentTime());
+        s.ui.setBuffer(s.engine.buffered() - s.engine.time());
+
+        refreshDebug(s);
+    }
+
+    function onWaiting(s, on) {
+        if (s.ui) s.ui.setLoading(on);
+
+        if (on) {
+            if (!s.buffering) {
+                s.buffering = true;
+                s.speedMeter.reset();
+                setDebugState(s, 'BUFFERING');
+                dbg(s, 'event', 'Buffering started');
+            }
+        } else if (s.buffering) {
+            s.buffering = false;
+            dbg(s, 'event', 'Buffering ended');
+
+            if (s.engine && !s.engine.paused()) setDebugState(s, 'PLAYING');
+        }
     }
 
     function onPlaying(s) {
@@ -1040,26 +2024,57 @@
         s.ui.setBigPlay(false);
         s.ui.clearError();
         s.errorCode = 0;
+        s.buffering = false;
         s.ui.setPlayState(false);
         s.ui.scheduleHide();
+
+        setDebugState(s, 'PLAYING');
+
+        if (!s.startedLogged) {
+            s.startedLogged = true;
+            dbg(s, 'event', 'Playback started');
+        }
+
+        refreshDebug(s);
     }
 
     function onPlayState(s) {
         if (!s.ui || !s.engine) return;
-        s.ui.setPlayState(s.engine.paused());
-        if (!s.engine.paused()) s.ui.scheduleHide();
-        else s.ui.show();
+
+        var paused = s.engine.paused();
+
+        s.ui.setPlayState(paused);
+
+        if (!paused) {
+            s.pausedLogged = false;
+            s.ui.scheduleHide();
+
+            if (!s.buffering) setDebugState(s, 'PLAYING');
+        } else {
+            s.ui.show();
+            setDebugState(s, 'PAUSED');
+
+            if (!s.pausedLogged) {
+                s.pausedLogged = true;
+                dbg(s, 'event', 'Playback paused');
+            }
+        }
+
+        refreshDebug(s);
     }
 
     function onEnded(s) {
         s.ended = true;
+
+        setDebugState(s, 'STOPPED');
+        dbg(s, 'event', 'Playback ended');
+
         if (!s.ui) return;
 
         s.ui.setPlayState(true);
         s.ui.show();
 
-        var reference = s.engine ? s.engine.el : null;
-        if (!reference) return;
+        if (!s.engine) return;
 
         // Кнопка повторного перегляду замість чорного екрана.
         s.ui.refs.bigplay.classList.add('is-on');
@@ -1085,23 +2100,86 @@
         4: { title: 'Формат не підтримується', text: 'Браузер не може відтворити це джерело. Можливі причини: MKV/HEVC/AC-3 або непідтримуваний контейнер.' }
     };
 
-    function onError(s, code) {
+    function canFallback(s) {
+        return !!(s && !s.fallbackUsed && s.engine && s.engine.name === 'Tizen AVPlay');
+    }
+
+    /**
+     * Безпечний перехід AVPlay → HTML5.
+     * Старий рушій повністю знищується ДО створення нового, щоб два рушії
+     * ніколи не працювали з одним потоком одночасно.
+     */
+    function fallbackToHtml5(s, reason) {
+        if (!s || s.fallbackUsed || !s.ui) return false;
+
+        s.fallbackUsed = true;
+
+        dbg(s, 'event', 'AVPlay failed → HTML5 fallback');
+        dbg(s, 'setError', 0);
+
+        var previous = s.engine;
+        s.engine = null;
+
+        if (previous) safe(function () { previous.destroy(); });
+
+        try {
+            s.engine = EngineFactory.create(s.hooks, s, 'html5');
+            s.engine.mount(s.ui.root, s.ui.root.firstChild);
+
+            dbg(s, 'setEngine', s.engine.name);
+            setDebugState(s, 'LOADING');
+            dbg(s, 'event', 'Fallback engine: ' + s.engine.name);
+
+            s.engine.load(s.url);
+
+            return true;
+        } catch (e) {
+            s.engine = null;
+            onError(s, 110, 'HTML5 fallback failed: ' + (e && e.message ? e.message : e), false);
+            return false;
+        }
+    }
+
+    function onError(s, code, text, fatal) {
         if (!s || s.destroying) return;
+
+        // Фатальна помилка AVPlay → одна спроба HTML5, якщо це можливо.
+        if (fatal && canFallback(s)) {
+            warn('AVPlay fatal error, fallback to HTML5:', text || code);
+
+            if (fallbackToHtml5(s, text)) return;
+        }
 
         s.errorCode = code || -1;
         s.ui && s.ui.setLoading(false);
         s.ui && s.ui.setBigPlay(false);
 
-        var message = ERROR_MESSAGES[code] || {
-            title: 'Помилка відтворення',
-            text: 'Не вдалося відтворити відео (код ' + code + ').'
-        };
+        var message;
 
-        warn('media error', code);
+        if (ERROR_MESSAGES[code]) {
+            message = {
+                title: ERROR_MESSAGES[code].title,
+                text: ERROR_MESSAGES[code].text + (text ? ' (' + text + ')' : '')
+            };
+        } else {
+            message = {
+                title: 'Помилка відтворення',
+                text: text || ('Не вдалося відтворити відео (код ' + code + ').')
+            };
+        }
+
+        s.lastError = { code: code, title: message.title };
+
+        warn('media error', code, text || '');
 
         if (s.ui) {
             s.ui.showError(message.title, message.text);
         }
+
+        setDebugState(s, 'ERROR');
+        dbg(s, 'setError', code, message.title);
+        dbg(s, 'event', 'Playback error: ' + code + ' (' + message.title + ')');
+        refreshDebug(s);
     }
 
     /* =====================================================================
@@ -1182,20 +2260,16 @@
         s.ui.clearError();
         s.ui.setLoading(true);
 
-        var resume = s.engine.currentTime();
+        var resume = s.engine.time();
 
-        var video = s.engine.el;
-        if (!video) return;
+        // Реконнект — через контракт рушія, без прямого доступу до <video>.
+        s.engine.load(s.url);
 
-        video.setAttribute('data-src', s.url);
-        video.src = s.url;
-        video.load();
+        if (resume > 0) s.engine.seek(resume);
 
-        if (resume > 0) {
-            try { video.currentTime = resume; } catch (e) { /* ignore */ }
-        }
-
-        s.engine.play();
+        setDebugState(s, 'LOADING');
+        dbg(s, 'setError', 0);
+        dbg(s, 'event', 'Reconnect attempt');
     }
 
     /* =====================================================================
@@ -1336,7 +2410,7 @@
     function saveProgress(s) {
         if (!s.engine) return;
 
-        var time = s.engine.currentTime();
+        var time = s.engine.time();
         var duration = s.engine.duration();
 
         if (!isFinite(time) || time < 3) return;
@@ -1358,7 +2432,125 @@
     }
 
     /* =====================================================================
-     * 13. Interceptor
+     * 13. Інтеграція в налаштування Lampa
+     * ---------------------------------------------------------------------
+     * Lampa зберігає вибір плеєра в Storage (player / player_torrent /
+     * player_iptv), а список опцій тримає в Lampa.Params.values. Плагін
+     * додає значення 'vlc' після app:ready, зберігаючи наявні опції та
+     * default. Повторний виклик нічого не дублює.
+     * ===================================================================== */
+
+    var Menu = {
+        keys: ['player', 'player_torrent', 'player_iptv'],
+        option: CONFIG.menuOption,
+        label: CONFIG.menuLabel,
+        applied: false,
+        browserSection: false,
+
+        labels: {
+            player: 'Плеєр для відео',
+            player_torrent: 'Плеєр для торентів',
+            player_iptv: 'Плеєр для IPTV'
+        },
+
+        hasOption: function (key) {
+            return safe(function () {
+                var values = window.Lampa.Params.values[key];
+                return !!(values && values[Menu.option] === Menu.label);
+            }, false);
+        },
+
+        /**
+         * На десктопному браузері Lampa ховає штатні рядки .is--player
+         * (Platform.any() === false). Щоб вибір був доступний і на ПК,
+         * додаємо окремий розділ через офіційний SettingsApi.
+         * На TV/консолях цей розділ не створюється — там є штатні рядки.
+         */
+        addBrowserSection: function (Params) {
+            if (Menu.browserSection) return;
+
+            var SettingsApi = window.Lampa && window.Lampa.SettingsApi;
+            var Platform = window.Lampa && window.Lampa.Platform;
+
+            if (!SettingsApi || !Platform) return;
+            if (typeof Platform.any !== 'function') return;
+            if (Platform.any()) return;
+
+            safe(function () {
+                SettingsApi.addComponent({
+                    component: 'vlc_player',
+                    name: 'VLC Player',
+                    icon: ICONS.logo
+                });
+
+                Menu.keys.forEach(function (key) {
+                    SettingsApi.addParam({
+                        component: 'vlc_player',
+                        param: {
+                            name: key,
+                            type: 'select',
+                            values: Params.values[key],
+                            default: Params.defaults[key]
+                        },
+                        field: {
+                            name: Menu.labels[key],
+                            description: 'Вибір плеєра для цього типу джерела'
+                        }
+                    });
+                });
+
+                Menu.browserSection = true;
+                log('menu: browser settings section added');
+            });
+        },
+
+        apply: function () {
+            if (!window.Lampa || !window.Lampa.Params) return false;
+
+            var Params = window.Lampa.Params;
+
+            if (!Params.values || typeof Params.values !== 'object') return false;
+
+            var changed = false;
+
+            Menu.keys.forEach(function (key) {
+                var values = Params.values[key];
+
+                if (!values || typeof values !== 'object') return;
+                if (values[Menu.option] === Menu.label) return;
+
+                var merged = {};
+
+                for (var name in values) {
+                    if (Object.prototype.hasOwnProperty.call(values, name)) merged[name] = values[name];
+                }
+
+                merged[Menu.option] = Menu.label;
+
+                var def = Params.defaults ? Params.defaults[key] : undefined;
+
+                if (typeof Params.select === 'function' && def !== undefined) {
+                    Params.select(key, merged, def);
+                } else {
+                    // Fallback: не чіпаємо default, лише додаємо опцію.
+                    values[Menu.option] = Menu.label;
+                }
+
+                changed = true;
+            });
+
+            Menu.addBrowserSection(Params);
+
+            Menu.applied = Menu.applied || changed || Menu.hasOption('player');
+
+            if (changed) log('menu: VLC Player option added');
+
+            return changed;
+        }
+    };
+
+    /* =====================================================================
+     * 14. Interceptor
      * ===================================================================== */
 
     function resolveUrl(data) {
@@ -1370,6 +2562,30 @@
         return LampaApi.toPlayUrl(url);
     }
 
+    /**
+     * Яке саме налаштування відповідає за це джерело.
+     * @param {object} data
+     * @returns {string} player | player_torrent | player_iptv
+     */
+    function sourceKey(data) {
+        if (data && data.iptv) return 'player_iptv';
+        if (data && (data.torrent_hash || data.torrent)) return 'player_torrent';
+
+        return 'player';
+    }
+
+    /**
+     * Перехоплюємо лише тоді, коли користувач вибрав VLC Player
+     * у відповідному налаштуванні Lampa.
+     */
+    function isVlcSelected(data) {
+        var key = sourceKey(data);
+
+        return safe(function () {
+            return window.Lampa.Storage.field(key) === CONFIG.menuOption;
+        }, false);
+    }
+
     function onPlayerCreate(event) {
         if (!event || !event.data) return;
 
@@ -1379,6 +2595,12 @@
         }
 
         var data = event.data;
+
+        if (!isVlcSelected(data)) {
+            log('skip: VLC Player is not selected for ' + sourceKey(data));
+            return;
+        }
+
         var url = resolveUrl(data);
 
         if (!url) {
@@ -1416,7 +2638,7 @@
     }
 
     /* =====================================================================
-     * 14. Boot
+     * 15. Boot
      * ===================================================================== */
 
     var started = false;
@@ -1431,6 +2653,11 @@
         started = true;
 
         injectStyles();
+
+        // Меню — після app:ready, коли Params.init() уже створив values/defaults.
+        // Помилка меню не повинна блокувати перехоплення.
+        safe(function () { Menu.apply(); });
+
         bindInterceptor();
 
         log('ready, version', VERSION);
@@ -1463,16 +2690,20 @@
     }
 
     /* =====================================================================
-     * 15. Публічний міні-API (для діагностики та тестів)
+     * 16. Публічний міні-API (для діагностики та тестів)
      * ===================================================================== */
 
     window.__lampaVlcPlayer = {
         version: VERSION,
         config: CONFIG,
+        menu: Menu,
 
         isReady: function () { return started; },
         isOpen: function () { return Session.isOpen(); },
         session: function () { return Session.current(); },
+
+        isVlcSelected: function (data) { return isVlcSelected(data || {}); },
+        sourceKey: sourceKey,
 
         open: function (data) {
             var url = resolveUrl(data);
@@ -1489,7 +2720,15 @@
 
         _internals: {
             Session: Session,
-            resolveUrl: resolveUrl
+            resolveUrl: resolveUrl,
+            EngineFactory: EngineFactory,
+            Html5Engine: Html5Engine,
+            TizenAvplayEngine: TizenAvplayEngine,
+            isAvplayAvailable: isAvplayAvailable,
+            fallbackToHtml5: fallbackToHtml5,
+            AVPLAY_REQUIRED: AVPLAY_REQUIRED,
+            AVPLAY_TRACK_METHODS: AVPLAY_TRACK_METHODS,
+            ENGINE_CONTRACT: ENGINE_CONTRACT
         }
     };
 

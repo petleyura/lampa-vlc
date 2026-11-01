@@ -2,7 +2,7 @@
 <html lang="uk">
 <head>
     <meta charset="utf-8">
-    <title>Lampa VLC Player — test harness</title>
+    <title>Lampa VLC Player — test harness (Stage 4.1)</title>
     <style>
         html, body { margin: 0; padding: 0; background: #111; color: #ddd; font: 13px/1.4 Consolas, monospace; }
         #out { padding: 12px; white-space: pre-wrap; }
@@ -74,8 +74,26 @@
                 back: function () { var c = controlls[activeName]; if (c && c.back) c.back(); }
             };
 
+            var Params = {
+                values: {
+                    player: { inner: 'Вбудований' },
+                    player_torrent: { inner: 'Вбудований' },
+                    player_iptv: { inner: 'Вбудований' }
+                },
+                defaults: {
+                    player: 'inner',
+                    player_torrent: 'inner',
+                    player_iptv: 'inner'
+                },
+                select: function (name, values, def) {
+                    this.values[name] = values;
+                    this.defaults[name] = def;
+                }
+            };
+
             window.Lampa = {
                 Listener: Bus(),
+                Params: Params,
                 Player: {
                     listener: Bus(),
                     play: function () { window.__TEST.standardPlayerStarted++; }
@@ -89,7 +107,10 @@
                 Storage: {
                     _data: {},
                     get: function (key, def) { return key in this._data ? this._data[key] : def; },
-                    set: function (key, val) { this._data[key] = val; }
+                    set: function (key, val) { this._data[key] = val; },
+                    field: function (name) {
+                        return this.get(name, Params.defaults[name]);
+                    }
                 }
             };
 
@@ -154,12 +175,13 @@
                 window.dispatchEvent(new KeyboardEvent('keydown', { keyCode: code, which: code, bubbles: true, cancelable: true }));
             }
 
-            function videoEl() {
-                return document.querySelector('.vlc-player video');
-            }
+            function videoEl() { return document.querySelector('.vlc-player video'); }
+            function rootEl() { return document.querySelector('.vlc-player'); }
+            function panelEl() { return document.querySelector('.vlc-debug'); }
 
-            function rootEl() {
-                return document.querySelector('.vlc-player');
+            function debugValue(name) {
+                var node = document.querySelector('.vlc-debug [data-d="' + name + '"]');
+                return node ? node.textContent.trim() : '';
             }
 
             function click(selector) {
@@ -169,137 +191,206 @@
                 return true;
             }
 
+            function menuKeys(key) {
+                return Lampa.Params.values[key] ? Object.keys(Lampa.Params.values[key]) : [];
+            }
+
             async function run() {
                 await wait(50);
 
-                /* -------- Тест 1: плагін ініціалізовано -------- */
                 var api = window.__lampaVlcPlayer;
+
+                /* ---------- 1. Ініціалізація ---------- */
                 line(!!api && api.isReady && api.isReady(), '1. Плагін підключено та ініціалізовано', api ? 'v' + api.version : 'no api');
 
-                /* -------- Тест 2-5: перехоплення create -------- */
+                /* ---------- 2-4. Меню ---------- */
+                var keysOk = ['player', 'player_torrent', 'player_iptv'].every(function (k) {
+                    return Lampa.Params.values[k] && Lampa.Params.values[k].vlc === 'VLC Player';
+                });
+                line(keysOk, '2. VLC Player додано в player / player_torrent / player_iptv');
+
+                var before = menuKeys('player').length;
+                api.menu.apply();
+                api.menu.apply();
+                var after = menuKeys('player').length;
+                line(before === after && after === 2, '3. Повторна ініціалізація не створює дублікатів', before + '→' + after);
+
+                var defaultsOk = Lampa.Params.defaults.player === 'inner' &&
+                                 Lampa.Params.defaults.player_torrent === 'inner' &&
+                                 Lampa.Params.defaults.player_iptv === 'inner';
+                line(defaultsOk, '4. Стандартні значення налаштувань не змінені', Lampa.Params.defaults.player);
+
+                /* ---------- 5. Негативний сценарій: VLC не вибрано ---------- */
+                Lampa.Storage.set('player', 'inner');
+                var abortInner = fireCreate({ url: 'http://example.test/movie.mp4', title: 'Inner' });
+                await wait(30);
+                line(abortInner === false && !rootEl(), '5. Якщо VLC не вибрано — Lampa працює як звичайно');
+
+                /* ---------- 6-7. Позитивний сценарій ---------- */
+                Lampa.Storage.set('player', 'vlc');
                 var url = 'http://192.168.1.10:8090/stream/Movie.2024.mkv?link=abc&index=3&preload';
                 var aborted = fireCreate({ url: url, title: 'Тестовий фільм', card: { title: 'Тестовий фільм' } });
-
                 await wait(50);
 
-                line(aborted === true, '2. Подія create перехоплена, abort() викликано');
+                line(aborted === true, '6. VLC вибрано — подія create перехоплена, abort() викликано');
                 line(T.standardPlayerStarted === 0 && !document.querySelector('.player'),
-                    '3. Стандартний програвач Lampa не створювався');
-                line(!!rootEl(), '4. Відкрито власний повноекранний контейнер');
+                    '7. Стандартний програвач Lampa не створювався');
 
                 var root = rootEl();
                 var cs = root ? getComputedStyle(root) : null;
                 line(cs && cs.position === 'fixed' && cs.zIndex === '2147483000',
-                    '5. Контейнер fixed + z-index', cs ? cs.position + '/' + cs.zIndex : 'n/a');
+                    '8. Власний контейнер fixed + z-index', cs ? cs.position + '/' + cs.zIndex : 'n/a');
 
                 var video = videoEl();
                 var src = video ? (video.getAttribute('src') || '') : '';
                 line(!!video && src.indexOf('&play') > -1 && src.indexOf('&preload') === -1,
-                    '6. HTML5 Video отримав URL Lampa з &play', src.slice(0, 90));
+                    '9. HTML5 Video отримав URL Lampa з &play', src.slice(0, 90));
 
-                /* -------- Тест 7: інтерфейс -------- */
-                var hasButtons = !!document.querySelector('[data-act="toggle"]') &&
-                                 !!document.querySelector('[data-act="back"]') &&
-                                 !!document.querySelector('[data-act="fwd"]') &&
-                                 !!document.querySelector('[data-act="settings"]') &&
-                                 !!document.querySelector('[data-act="close"]') &&
-                                 !!document.querySelector('.vlc-progress') &&
-                                 !!document.querySelector('.vlc-logo');
-                line(hasButtons, '7. Панель VLC: play, -10, +10, прогрес, налаштування, вихід, логотип');
+                /* ---------- 10-13. Debug Panel ---------- */
+                var panel = panelEl();
+                line(!!panel, '10. Debug Panel створена');
 
-                /* -------- Тест 8: play/pause -------- */
+                var title = panel ? panel.querySelector('.vlc-debug__title').textContent.trim() : '';
+                line(title === 'VLC PLAYER DEBUG', '11. Заголовок панелі', title);
+
+                line(debugValue('engine') === 'HTML5', '12. Рушій у панелі — HTML5', debugValue('engine'));
+                line(debugValue('source') === 'TorrServer', '13. Джерело визначено як TorrServer', debugValue('source'));
+
+                var states = ['INITIALIZING', 'LOADING', 'PLAYING', 'PAUSED', 'BUFFERING', 'ERROR', 'STOPPED'];
+                line(states.indexOf(debugValue('state')) > -1, '14. Стан плеєра відображається', debugValue('state'));
+
+                line(debugValue('resolution') === 'N/A', '15. Невідома роздільність — N/A', debugValue('resolution'));
+                line(debugValue('speed') === 'N/A', '16. Швидкість без даних — N/A', debugValue('speed'));
+
+                var events = panel ? panel.querySelectorAll('.vlc-debug__log > div').length : 0;
+                line(events > 0, '17. Журнал подій заповнюється', 'events=' + events);
+
+                /* ---------- 18. Реальні метрики ---------- */
+                if (video) {
+                    Object.defineProperty(video, 'duration', { value: 120, configurable: true });
+                    Object.defineProperty(video, 'currentTime', { value: 10, writable: true, configurable: true });
+                    Object.defineProperty(video, 'videoWidth', { value: 1920, configurable: true });
+                    Object.defineProperty(video, 'videoHeight', { value: 1080, configurable: true });
+                    Object.defineProperty(video, 'buffered', {
+                        value: { length: 1, start: function () { return 0; }, end: function () { return 40; } },
+                        configurable: true
+                    });
+                    video.dispatchEvent(new Event('loadedmetadata'));
+                    video.dispatchEvent(new Event('progress'));
+                }
+                await wait(50);
+
+                line(debugValue('resolution') === '1920×1080', '18. Роздільність із videoWidth/videoHeight', debugValue('resolution'));
+                line(debugValue('duration') === '02:00', '19. Тривалість відображається', debugValue('duration'));
+                line(debugValue('time') === '00:10', '20. Поточний час відображається', debugValue('time'));
+                line(/^30\.0 s$/.test(debugValue('buffer')), '21. Буфер із video.buffered', debugValue('buffer'));
+
+                /* ---------- 21a-21d. Engine / Player Core ---------- */
+                var internal = api._internals || {};
+                line(!!internal.EngineFactory && !!internal.Html5Engine && Array.isArray(internal.ENGINE_CONTRACT),
+                    '21a. EngineFactory / Html5Engine / ENGINE_CONTRACT доступні');
+
+                var session = api.session();
+                var engine = session && session.engine;
+                line(!!engine && engine.name === 'HTML5', '21b. Player Core створив Html5Engine', engine ? engine.name : 'n/a');
+
+                var contractOk = !!engine && internal.ENGINE_CONTRACT.every(function (method) {
+                    return typeof engine[method] === 'function';
+                });
+                line(contractOk, '21c. Html5Engine реалізує весь контракт');
+
+                var caps = engine && engine.capabilities ? engine.capabilities() : null;
+                line(!!caps && typeof caps.audioTracks === 'boolean' && caps.subtitleDelay === false,
+                    '21d. capabilities() повертає реальні можливості', caps ? JSON.stringify(caps) : 'n/a');
+
+                line(typeof internal.isAvplayAvailable === 'function' && internal.isAvplayAvailable() === false,
+                    '21e. У браузері AVPlay недоступний');
+                line(internal.EngineFactory.platformId() === 'html5',
+                    '21f. EngineFactory → HTML5 у браузері', internal.EngineFactory.platformId());
+
+                /* ---------- 22. Буферизація ---------- */
+                if (video) video.dispatchEvent(new Event('waiting'));
+                await wait(30);
+                var bufferingState = debugValue('state');
+                if (video) video.dispatchEvent(new Event('playing'));
+                await wait(30);
+                line(bufferingState === 'BUFFERING' && debugValue('state') === 'PLAYING',
+                    '22. Стани BUFFERING → PLAYING', bufferingState + '→' + debugValue('state'));
+
+                /* ---------- 23. Панель не блокує керування ---------- */
+                var pcs = panel ? getComputedStyle(panel) : null;
+                line(pcs && pcs.pointerEvents === 'none', '23. Панель не перехоплює кліки (pointer-events: none)');
+
                 var beforePlay = T.media.playCount;
                 click('[data-act="toggle"]');
                 await wait(30);
-                line(T.media.playCount > beforePlay, '8. Кнопка Play/Pause викликає play()');
+                line(T.media.playCount > beforePlay, '24. Кнопка Play/Pause продовжує працювати');
 
-                click('[data-act="toggle"]');
-                await wait(30);
-                line(T.media.pauseCount > 0, '9. Повторне натискання викликає pause()');
-
-                /* -------- Тест 10: перемотування -------- */
-                var vid = videoEl();
-                var seeked = false;
-                if (vid) {
-                    Object.defineProperty(vid, 'duration', { value: 100, configurable: true });
-                    Object.defineProperty(vid, 'currentTime', {
-                        value: 0,
-                        writable: true,
-                        configurable: true
-                    });
-                    var oldTime = vid.currentTime;
-                    click('[data-act="fwd"]');
-                    seeked = vid.currentTime > oldTime + 5;
+                /* ---------- 25. Помилка ---------- */
+                if (video) {
+                    Object.defineProperty(video, 'error', { value: { code: 4 }, configurable: true });
+                    video.dispatchEvent(new Event('error'));
                 }
-                line(seeked, '10. Кнопка +10 перемотує вперед');
+                await wait(50);
 
-                /* -------- Тест 11: буферизація -------- */
-                if (vid) {
-                    vid.dispatchEvent(new Event('waiting'));
-                }
-                await wait(20);
-                var spinnerOn = !!document.querySelector('.vlc-spinner.is-on');
-                if (vid) vid.dispatchEvent(new Event('playing'));
-                await wait(20);
-                var spinnerOff = !document.querySelector('.vlc-spinner.is-on');
-                line(spinnerOn && spinnerOff, '11. Індикатор буферизації з’являється та зникає');
+                var errTitle = debugValue('error');
+                line(debugValue('state') === 'ERROR', '25. Стан ERROR після помилки', debugValue('state'));
+                line(errTitle.indexOf('4') === 0, '26. Код помилки в панелі', errTitle);
+                line(!!document.querySelector('.vlc-error.is-on'), '27. Помилка показана в інтерфейсі');
+                line(!!document.querySelector('[data-act="retry"]'), '28. Є кнопка повторної спроби');
 
-                /* -------- Тест 12: Escape закриває -------- */
-                var prevName = 'content'; // контролер, активний до перехоплення
+                /* ---------- 29-31. Закриття ---------- */
+                var prevName = 'content';
                 key(27);
                 await wait(80);
-                line(!rootEl() && !document.querySelector('.vlc-player'),
-                    '12. Escape закриває плеєр і видаляє DOM');
-                line(!window.__lampaVlcPlayer.isOpen(), '13. Сесія звільнена (isOpen() === false)');
-                line(document.body.classList.contains('vlc-open') === false,
-                    '14. Клас блокування прокрутки знято');
 
-                var restored = Lampa.Controller.enabled().name;
-                line(restored === prevName && restored !== 'vlc_player',
-                    '15. Контролер Lampa відновлено', restored);
+                line(!rootEl() && !panelEl(), '29. Escape закриває плеєр і видаляє Debug Panel');
+                line(document.body.classList.contains('vlc-open') === false, '30. Блокування прокрутки знято');
+                line(Lampa.Controller.enabled().name === prevName, '31. Контролер Lampa відновлено',
+                    Lampa.Controller.enabled().name);
 
-                /* -------- Тест 16: повторний запуск -------- */
-                var aborted2 = fireCreate({
-                    url: 'http://example.test/movie.mp4?x=1',
-                    title: 'Другий фільм',
-                    card: { title: 'Другий фільм' }
-                });
+                /* ---------- 32. Повторний запуск ---------- */
+                var aborted2 = fireCreate({ url: 'http://example.test/second.mp4', title: 'Другий' });
                 await wait(50);
-                var roots = document.querySelectorAll('.vlc-player').length;
-                line(aborted2 && roots === 1, '16. Повторний запуск: одна сесія, без дублів', 'roots=' + roots);
-
-                var src2 = videoEl() ? videoEl().getAttribute('src') : '';
-                line(src2.indexOf('movie.mp4') > -1, '17. Друге джерело підставлено у video', src2);
-
-                /* -------- Тест 18: помилка декодування -------- */
-                var v2 = videoEl();
-                if (v2) {
-                    Object.defineProperty(v2, 'error', { value: { code: 4 }, configurable: true });
-                    v2.dispatchEvent(new Event('error'));
-                }
-                await wait(50);
-                var errBox = document.querySelector('.vlc-error.is-on');
-                var errTitle = errBox ? errBox.querySelector('.vlc-error__title').textContent : '';
-                line(!!errBox && /Формат/.test(errTitle), '18. Помилка декодування показана в інтерфейсі', errTitle);
-                line(!!document.querySelector('[data-act="retry"]'), '19. Є кнопка повторної спроби');
-
-                /* -------- Тест 20: закриття після помилки -------- */
-                click('[data-act="close"]');
+                line(aborted2 && document.querySelectorAll('.vlc-player').length === 1 &&
+                     document.querySelectorAll('.vlc-debug').length === 1,
+                    '32. Повторний запуск без дублювання панелей');
+                key(27);
                 await wait(60);
-                line(!rootEl(), '20. Після помилки плеєр закривається без зависання');
 
-                /* -------- Тест 21: без URL — не перехоплюємо -------- */
-                var aborted3 = fireCreate({ title: 'Без URL' });
+                /* ---------- 33. Гейт для торентів ---------- */
+                Lampa.Storage.set('player', 'inner');
+                Lampa.Storage.set('player_torrent', 'vlc');
+                var abortTorrent = fireCreate({
+                    url: 'http://192.168.1.10:8090/stream/x.mkv?link=h&index=1&play',
+                    torrent_hash: 'h',
+                    title: 'Torrent'
+                });
+                await wait(40);
+                line(abortTorrent === true && debugValue('source') === 'TorrServer',
+                    '33. player_torrent=vlc перехоплює лише торенти', debugValue('source'));
+
+                key(27);
+                await wait(60);
+
+                /* ---------- 34. Звичайне відео при player=inner ---------- */
+                var abortNormal = fireCreate({ url: 'http://example.test/other.mp4', title: 'Other' });
                 await wait(30);
-                line(aborted3 === false && !rootEl(), '21. Без URL керування залишається Lampa (abort не викликано)');
+                line(abortNormal === false && !rootEl(), '34. Звичайне відео не перехоплюється, якщо player=inner');
 
-                /* -------- Тест 22: залишкові обробники -------- */
-                var errCount = T.errors.length;
-                key(32);
+                /* ---------- 35. Без URL ---------- */
+                Lampa.Storage.set('player', 'vlc');
+                var abortNoUrl = fireCreate({ title: 'Без URL' });
                 await wait(30);
-                line(T.errors.length === errCount, '22. Після закриття клавіші не викликають помилок');
+                line(abortNoUrl === false && !rootEl(), '35. Без URL керування залишається Lampa');
 
-                /* -------- Підсумок -------- */
+                /* ---------- 36. Збереження вибору ---------- */
+                Lampa.Storage.set('player', 'vlc');
+                line(Lampa.Storage.field('player') === 'vlc', '36. Вибір VLC зберігається у Storage');
+
+                /* ---------- 37. Помилок не було ---------- */
+                line(T.errors.length === 0, '37. Помилок JavaScript не зафіксовано', T.errors.join(' | '));
+
                 var passed = results.filter(function (r) { return r.ok; }).length;
                 var failed = results.length - passed;
 

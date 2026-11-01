@@ -77,6 +77,67 @@ check('Обробники лише для активної сесії', /if \(!s
 });
 check('Стан LIVE для невідомої тривалості', /isFinite\(duration\)/.test(src) && /vlc-live/.test(src));
 
+/* ---------- 7.1. Етап 4.1: меню Lampa ---------- */
+check('Меню: ключі player/player_torrent/player_iptv',
+    /keys:\s*\['player',\s*'player_torrent',\s*'player_iptv'\]/.test(src));
+check('Меню: використовує Lampa.Params.select', /Params\.select\(key, merged, def\)/.test(src));
+check('Меню: не дублює опцію', /if \(values\[Menu\.option\] === Menu\.label\) return;/.test(src));
+check('Меню: зберігає наявні опції', /merged\[name\] = values\[name\]/.test(src));
+check('Меню: не змінює default (передає наявний)', /var def = Params\.defaults \? Params\.defaults\[key\] : undefined/.test(src));
+check('Меню: fallback без Params.select', /values\[Menu\.option\] = Menu\.label;/.test(src));
+check('Меню: ПК-розділ через SettingsApi.addParam', /SettingsApi\.addParam\(/.test(src));
+check('Меню: ПК-розділ лише коли Platform.any() === false', /Platform\.any\(\)\) return;/.test(src));
+
+/* ---------- 7.2. Етап 4.1: перехоплення лише для VLC ---------- */
+check('Визначення ключа джерела', /function sourceKey\(data\)/.test(src));
+check('Гейт за вибором у Storage', /window\.Lampa\.Storage\.field\(key\) === CONFIG\.menuOption/.test(src));
+check('Пропуск, якщо VLC не вибрано', /if \(!isVlcSelected\(data\)\)/.test(src));
+
+/* ---------- 7.3. Етап 4.1: Debug Panel ---------- */
+check('Заголовок VLC PLAYER DEBUG', /VLC PLAYER DEBUG/.test(src));
+check('Стани INITIALIZING/LOADING/PLAYING/PAUSED/BUFFERING/ERROR/STOPPED',
+    ['INITIALIZING', 'LOADING', 'PLAYING', 'PAUSED', 'BUFFERING', 'ERROR', 'STOPPED']
+        .every(s => src.indexOf("'" + s + "'") > -1));
+check('Джерела LINK/TorrServer/IPTV/UNKNOWN',
+    ['LINK', 'TorrServer', 'IPTV', 'UNKNOWN'].every(s => src.indexOf("'" + s + "'") > -1));
+check('N/A для недоступних показників', /'N\/A'/.test(src));
+check('Позначка ESTIMATED', /ESTIMATED/.test(src));
+check('Панель не перехоплює кліки (pointer-events:none)', /\.vlc-debug\{[^}]*pointer-events:none/.test(src));
+check('Реальні video.buffered / videoWidth / videoHeight',
+    /buffered\(\)/.test(src) && /videoWidth/.test(src) && /videoHeight/.test(src));
+check('Журнал подій обмежений', /CONFIG\.debugEvents/.test(src));
+check('Видалення панелі разом із сесією', /s\.debug\.dispose\(\)/.test(src));
+
+/* ---------- 7.4. Етап 4.2: Engine / Player Core ---------- */
+check('Є ENGINE_CONTRACT', /var ENGINE_CONTRACT = \[/.test(src));
+check('Є Html5Engine', /function Html5Engine\(hooks\)/.test(src));
+check('Є EngineFactory', /var EngineFactory = \{/.test(src));
+check('EngineFactory: tizen-avplay лише за наявності AVPlay, інакше html5',
+    /if \(tizen && isAvplayAvailable\(\)\) return 'tizen-avplay';/.test(src) && /return 'html5';/.test(src));
+check('EngineFactory.create через мапу рушіїв', /EngineFactory\.engines\[id\]/.test(src));
+check('Player Core створює рушій через фабрику', /s\.engine = EngineFactory\.create\(hooks, s\)/.test(src));
+check('Player Core монтує рушій через контракт', /s\.engine\.mount\(s\.ui\.root, s\.ui\.root\.firstChild\)/.test(src));
+check('Player Core не звертається до engine.el', !/s\.engine\.el/.test(src));
+check('Debug Panel бере ім’я рушія з engine.name', /dbg\(s, 'setEngine', s\.engine\.name/.test(src));
+check('audioTracks повертає null без API', /if \(!list \|\| !list\.length\) return null;/.test(src));
+check('setSubtitleDelay не фейкує підтримку', /setSubtitleDelay: function \(\) \{\s*return false;/.test(src));
+
+/* ---------- 7.5. Етап 4.3: Tizen AVPlay ---------- */
+check('Є TizenAvplayEngine', /function TizenAvplayEngine\(hooks\)/.test(src));
+check('EngineFactory містить tizen-avplay', /'tizen-avplay': TizenAvplayEngine/.test(src));
+check('Tizen визначається через Platform.is', /Platform\.is\('tizen'\)/.test(src));
+check('Перевірка webapis.avplay', /window\.webapis && window\.webapis\.avplay/.test(src));
+check('Немає визначення Tizen за User-Agent', !/userAgent[\s\S]{0,160}tizen/i.test(src));
+check('AVPlay: <object type=application/avplayer>', /application\/avplayer/.test(src));
+check('AVPlay: setDisplayRect 1920x1080', /setDisplayRect\(0, 0, 1920, 1080\)/.test(src));
+check('AVPlay: prepareAsync + play', /prepareAsync\(function/.test(src) && /av\.play\(\)/.test(src));
+check('AVPlay: setListener', /av\.setListener\(\{/.test(src));
+check('AVPlay: setSelectTrack AUDIO/TEXT', /setSelectTrack\('AUDIO'/.test(src) && /setSelectTrack\('TEXT'/.test(src));
+check('AVPlay: setSubtitlePosition', /setSubtitlePosition\(value\)/.test(src));
+check('AVPlay: buffered() = 0 (N/A)', /не надає інтерфейсу buffered ranges[\s\S]{0,220}return 0;/.test(src));
+check('Fallback AVPlay→HTML5', /function fallbackToHtml5/.test(src) && /EngineFactory\.create\(s\.hooks, s, 'html5'\)/.test(src));
+check('Fallback одноразовий', /!s\.fallbackUsed/.test(src));
+
 /* ---------- 8. Розмір ---------- */
 const lines = src.split('\n').length;
 check('Файл не порожній (>300 рядків)', lines > 300, lines + ' рядків');
