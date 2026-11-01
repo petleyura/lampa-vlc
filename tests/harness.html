@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+    <meta charset="utf-8">
+    <title>Lampa VLC Player — test harness</title>
+    <style>
+        html, body { margin: 0; padding: 0; background: #111; color: #ddd; font: 13px/1.4 Consolas, monospace; }
+        #out { padding: 12px; white-space: pre-wrap; }
+        .pass { color: #4caf50; }
+        .fail { color: #ff5252; }
+        #lampa-stub { padding: 12px; color: #777; }
+    </style>
+</head>
+<body>
+    <div id="lampa-stub">Lampa stub area (імітація каталогу)</div>
+    <pre id="out"></pre>
+
+    <!-- ================= Імітація Lampa ================= -->
+    <script>
+        (function () {
+            window.__TEST = {
+                aborted: 0,
+                standardPlayerStarted: 0,
+                controllerCalls: [],
+                errors: []
+            };
+
+            window.addEventListener('error', function (e) {
+                window.__TEST.errors.push(String(e.message || e.error));
+            });
+
+            function Bus() {
+                var listeners = {};
+                return {
+                    follow: function (type, fn) {
+                        type.split(',').forEach(function (name) {
+                            (listeners[name] = listeners[name] || []).push(fn);
+                        });
+                        return this;
+                    },
+                    remove: function (type, fn) {
+                        var arr = listeners[type] || [];
+                        var i = arr.indexOf(fn);
+                        if (i >= 0) arr.splice(i, 1);
+                        return this;
+                    },
+                    send: function (type, event) {
+                        (listeners[type] || []).slice(0).forEach(function (fn) {
+                            fn(event || {});
+                        });
+                        return this;
+                    }
+                };
+            }
+
+            var controlls = {};
+            var activeName = 'content';
+            var calls = window.__TEST.controllerCalls;
+
+            controlls.content = { toggle: function () {} };
+
+            var Controller = {
+                add: function (name, handlers) { controlls[name] = handlers; },
+                toggle: function (name) {
+                    if (!controlls[name]) return;
+                    var prev = controlls[activeName];
+                    if (prev && prev.gone && activeName !== name) prev.gone(name);
+                    activeName = name;
+                    calls.push(name);
+                    var cur = controlls[name];
+                    if (cur.toggle) cur.toggle();
+                },
+                enabled: function () { return { name: activeName, controller: controlls[activeName] }; },
+                back: function () { var c = controlls[activeName]; if (c && c.back) c.back(); }
+            };
+
+            window.Lampa = {
+                Listener: Bus(),
+                Player: {
+                    listener: Bus(),
+                    play: function () { window.__TEST.standardPlayerStarted++; }
+                },
+                Controller: Controller,
+                Torserver: {
+                    toPlayUrl: function (url) { return String(url).replace('&preload', '&play'); }
+                },
+                Timeline: { update: function () { window.__TEST.timelineUpdated = (window.__TEST.timelineUpdated || 0) + 1; } },
+                Background: { theme: function () {} },
+                Storage: {
+                    _data: {},
+                    get: function (key, def) { return key in this._data ? this._data[key] : def; },
+                    set: function (key, val) { this._data[key] = val; }
+                }
+            };
+
+            // Імітація вже завантаженої Lampa
+            window.appready = true;
+
+            // Заглушки медіа-API, щоб тести не залежали від реального декодера
+            var media = {
+                playCount: 0,
+                pauseCount: 0
+            };
+            window.__TEST.media = media;
+
+            HTMLMediaElement.prototype.play = function () {
+                media.playCount++;
+                this.__testPaused = false;
+                try { this.dispatchEvent(new Event('play')); } catch (e) {}
+                return Promise.resolve();
+            };
+            HTMLMediaElement.prototype.pause = function () {
+                media.pauseCount++;
+                this.__testPaused = true;
+                try { this.dispatchEvent(new Event('pause')); } catch (e) {}
+            };
+        })();
+    </script>
+
+    <!-- ================= Плагін ================= -->
+    <script src="../Lampa-VLC-Player.js"></script>
+
+    <!-- ================= Тести ================= -->
+    <script>
+        (function () {
+            var out = document.getElementById('out');
+            var results = [];
+            var T = window.__TEST;
+
+            function line(ok, name, extra) {
+                var cls = ok ? 'pass' : 'fail';
+                var text = (ok ? 'PASS' : 'FAIL') + '  ' + name + (extra ? '  [' + extra + ']' : '');
+                results.push({ ok: ok, name: name, extra: extra || '' });
+                var div = document.createElement('div');
+                div.className = cls;
+                div.textContent = text;
+                out.appendChild(div);
+            }
+
+            function wait(ms) {
+                return new Promise(function (r) { setTimeout(r, ms); });
+            }
+
+            function fireCreate(data) {
+                var aborted = false;
+                Lampa.Player.listener.send('create', {
+                    data: data,
+                    abort: function () { aborted = true; T.aborted++; }
+                });
+                return aborted;
+            }
+
+            function key(code) {
+                window.dispatchEvent(new KeyboardEvent('keydown', { keyCode: code, which: code, bubbles: true, cancelable: true }));
+            }
+
+            function videoEl() {
+                return document.querySelector('.vlc-player video');
+            }
+
+            function rootEl() {
+                return document.querySelector('.vlc-player');
+            }
+
+            function click(selector) {
+                var node = document.querySelector(selector);
+                if (!node) return false;
+                node.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                return true;
+            }
+
+            async function run() {
+                await wait(50);
+
+                /* -------- Тест 1: плагін ініціалізовано -------- */
+                var api = window.__lampaVlcPlayer;
+                line(!!api && api.isReady && api.isReady(), '1. Плагін підключено та ініціалізовано', api ? 'v' + api.version : 'no api');
+
+                /* -------- Тест 2-5: перехоплення create -------- */
+                var url = 'http://192.168.1.10:8090/stream/Movie.2024.mkv?link=abc&index=3&preload';
+                var aborted = fireCreate({ url: url, title: 'Тестовий фільм', card: { title: 'Тестовий фільм' } });
+
+                await wait(50);
+
+                line(aborted === true, '2. Подія create перехоплена, abort() викликано');
+                line(T.standardPlayerStarted === 0 && !document.querySelector('.player'),
+                    '3. Стандартний програвач Lampa не створювався');
+                line(!!rootEl(), '4. Відкрито власний повноекранний контейнер');
+
+                var root = rootEl();
+                var cs = root ? getComputedStyle(root) : null;
+                line(cs && cs.position === 'fixed' && cs.zIndex === '2147483000',
+                    '5. Контейнер fixed + z-index', cs ? cs.position + '/' + cs.zIndex : 'n/a');
+
+                var video = videoEl();
+                var src = video ? (video.getAttribute('src') || '') : '';
+                line(!!video && src.indexOf('&play') > -1 && src.indexOf('&preload') === -1,
+                    '6. HTML5 Video отримав URL Lampa з &play', src.slice(0, 90));
+
+                /* -------- Тест 7: інтерфейс -------- */
+                var hasButtons = !!document.querySelector('[data-act="toggle"]') &&
+                                 !!document.querySelector('[data-act="back"]') &&
+                                 !!document.querySelector('[data-act="fwd"]') &&
+                                 !!document.querySelector('[data-act="settings"]') &&
+                                 !!document.querySelector('[data-act="close"]') &&
+                                 !!document.querySelector('.vlc-progress') &&
+                                 !!document.querySelector('.vlc-logo');
+                line(hasButtons, '7. Панель VLC: play, -10, +10, прогрес, налаштування, вихід, логотип');
+
+                /* -------- Тест 8: play/pause -------- */
+                var beforePlay = T.media.playCount;
+                click('[data-act="toggle"]');
+                await wait(30);
+                line(T.media.playCount > beforePlay, '8. Кнопка Play/Pause викликає play()');
+
+                click('[data-act="toggle"]');
+                await wait(30);
+                line(T.media.pauseCount > 0, '9. Повторне натискання викликає pause()');
+
+                /* -------- Тест 10: перемотування -------- */
+                var vid = videoEl();
+                var seeked = false;
+                if (vid) {
+                    Object.defineProperty(vid, 'duration', { value: 100, configurable: true });
+                    Object.defineProperty(vid, 'currentTime', {
+                        value: 0,
+                        writable: true,
+                        configurable: true
+                    });
+                    var oldTime = vid.currentTime;
+                    click('[data-act="fwd"]');
+                    seeked = vid.currentTime > oldTime + 5;
+                }
+                line(seeked, '10. Кнопка +10 перемотує вперед');
+
+                /* -------- Тест 11: буферизація -------- */
+                if (vid) {
+                    vid.dispatchEvent(new Event('waiting'));
+                }
+                await wait(20);
+                var spinnerOn = !!document.querySelector('.vlc-spinner.is-on');
+                if (vid) vid.dispatchEvent(new Event('playing'));
+                await wait(20);
+                var spinnerOff = !document.querySelector('.vlc-spinner.is-on');
+                line(spinnerOn && spinnerOff, '11. Індикатор буферизації з’являється та зникає');
+
+                /* -------- Тест 12: Escape закриває -------- */
+                var prevName = 'content'; // контролер, активний до перехоплення
+                key(27);
+                await wait(80);
+                line(!rootEl() && !document.querySelector('.vlc-player'),
+                    '12. Escape закриває плеєр і видаляє DOM');
+                line(!window.__lampaVlcPlayer.isOpen(), '13. Сесія звільнена (isOpen() === false)');
+                line(document.body.classList.contains('vlc-open') === false,
+                    '14. Клас блокування прокрутки знято');
+
+                var restored = Lampa.Controller.enabled().name;
+                line(restored === prevName && restored !== 'vlc_player',
+                    '15. Контролер Lampa відновлено', restored);
+
+                /* -------- Тест 16: повторний запуск -------- */
+                var aborted2 = fireCreate({
+                    url: 'http://example.test/movie.mp4?x=1',
+                    title: 'Другий фільм',
+                    card: { title: 'Другий фільм' }
+                });
+                await wait(50);
+                var roots = document.querySelectorAll('.vlc-player').length;
+                line(aborted2 && roots === 1, '16. Повторний запуск: одна сесія, без дублів', 'roots=' + roots);
+
+                var src2 = videoEl() ? videoEl().getAttribute('src') : '';
+                line(src2.indexOf('movie.mp4') > -1, '17. Друге джерело підставлено у video', src2);
+
+                /* -------- Тест 18: помилка декодування -------- */
+                var v2 = videoEl();
+                if (v2) {
+                    Object.defineProperty(v2, 'error', { value: { code: 4 }, configurable: true });
+                    v2.dispatchEvent(new Event('error'));
+                }
+                await wait(50);
+                var errBox = document.querySelector('.vlc-error.is-on');
+                var errTitle = errBox ? errBox.querySelector('.vlc-error__title').textContent : '';
+                line(!!errBox && /Формат/.test(errTitle), '18. Помилка декодування показана в інтерфейсі', errTitle);
+                line(!!document.querySelector('[data-act="retry"]'), '19. Є кнопка повторної спроби');
+
+                /* -------- Тест 20: закриття після помилки -------- */
+                click('[data-act="close"]');
+                await wait(60);
+                line(!rootEl(), '20. Після помилки плеєр закривається без зависання');
+
+                /* -------- Тест 21: без URL — не перехоплюємо -------- */
+                var aborted3 = fireCreate({ title: 'Без URL' });
+                await wait(30);
+                line(aborted3 === false && !rootEl(), '21. Без URL керування залишається Lampa (abort не викликано)');
+
+                /* -------- Тест 22: залишкові обробники -------- */
+                var errCount = T.errors.length;
+                key(32);
+                await wait(30);
+                line(T.errors.length === errCount, '22. Після закриття клавіші не викликають помилок');
+
+                /* -------- Підсумок -------- */
+                var passed = results.filter(function (r) { return r.ok; }).length;
+                var failed = results.length - passed;
+
+                var summary = document.createElement('div');
+                summary.id = 'summary';
+                summary.textContent = '\nSUMMARY passed=' + passed + ' failed=' + failed + ' total=' + results.length;
+                out.appendChild(summary);
+
+                window.__TEST.summary = 'passed=' + passed + ' failed=' + failed;
+                window.__TEST.done = true;
+            }
+
+            run().catch(function (e) {
+                var div = document.createElement('div');
+                div.className = 'fail';
+                div.textContent = 'HARNESS ERROR: ' + (e && e.stack ? e.stack : e);
+                out.appendChild(div);
+                window.__TEST.done = true;
+                window.__TEST.harnessError = String(e);
+            });
+        })();
+    </script>
+</body>
+</html>
