@@ -122,9 +122,11 @@ class FakeAvplay {
         this.failOpen = false;
         this.failPrepare = false;
         this.failPlay = false;
+        this.failSetTrack = false;
+        this.currentAudio = 0;
         this.tracks = [
-            { type: 'AUDIO', index: 0, extra_info: JSON.stringify({ language: 'uk', channels: 2 }) },
-            { type: 'AUDIO', index: 1, extra_info: JSON.stringify({ language: 'en', channels: 6 }) },
+            { type: 'AUDIO', index: 0, extra_info: JSON.stringify({ language: 'uk', channels: 2, sample_rate: 48000, fourCC: 'AC3' }) },
+            { type: 'AUDIO', index: 1, extra_info: JSON.stringify({ language: 'en', channels: 6, sample_rate: 48000, fourCC: 'EAC3' }) },
             { type: 'TEXT', index: 2, extra_info: JSON.stringify({ track_lang: 'en' }) }
         ];
     }
@@ -161,9 +163,16 @@ class FakeAvplay {
     setSpeed(value) { this.calls.push(['setSpeed', value]); }
     getTotalTrackInfo() { return this.tracks; }
     getCurrentStreamInfo() {
-        return [{ type: 'VIDEO', extra_info: JSON.stringify({ width: 1920, height: 1080 }) }];
+        return [
+            { type: 'VIDEO', extra_info: JSON.stringify({ width: 1920, height: 1080, fourCC: 'H264', frame_rate: '24000/1001' }) },
+            { type: 'AUDIO', index: this.currentAudio, extra_info: JSON.stringify({ language: 'uk', channels: 2 }) }
+        ];
     }
-    setSelectTrack(type, index) { this.calls.push(['setSelectTrack', type, index]); }
+    setSelectTrack(type, index) {
+        if (this.failSetTrack) throw new Error('select boom');
+        this.calls.push(['setSelectTrack', type, index]);
+        if (type === 'AUDIO') this.currentAudio = index;
+    }
     setSubtitlePosition(ms) { this.calls.push(['setSubtitlePosition', ms]); }
 
     emit(event, data) {
@@ -307,11 +316,24 @@ check('setRate(2) → setSpeed(2)', engine.setRate(2) === true && fakeAv.calls.s
 const audio = engine.audioTracks();
 check('audioTracks() повертає 2 доріжки', Array.isArray(audio) && audio.length === 2, audio ? audio.length : 'null');
 check('audioTracks() має мову uk', audio && audio[0].language === 'uk', audio ? audio[0].language : '');
+check('audioTracks() має кодек fourCC', audio && audio[0].codec === 'AC3', audio ? audio[0].codec : '');
+check('audioTracks() має канали/частоту', audio && audio[0].channels === 2 && audio[0].sampleRate === 48000,
+    audio ? audio[0].channels + '/' + audio[0].sampleRate : '');
+check('audioTracks() визначає активну доріжку', audio && audio[0].enabled === true && audio[1].enabled === false,
+    audio ? audio[0].enabled + '/' + audio[1].enabled : '');
 
+const positionBeforeSelect = engine.time();
 fakeAv.calls = [];
 check('selectAudio(1) викликає setSelectTrack', engine.selectAudio(1) === true &&
     fakeAv.calls.some(c => c[0] === 'setSelectTrack' && c[1] === 'AUDIO' && c[2] === 1));
+check('selectAudio(1) не змінює позицію', engine.time() === positionBeforeSelect, engine.time());
+check('selectAudio(1) оновлює активну доріжку', engine.audioTracks()[1].enabled === true &&
+    engine.audioTracks()[0].enabled === false);
 check('selectAudio(9) → false', engine.selectAudio(9) === false);
+
+fakeAv.failSetTrack = true;
+check('selectAudio при помилці AVPlay → false', engine.selectAudio(0) === false);
+fakeAv.failSetTrack = false;
 
 const subs = engine.subtitleTracks();
 check('subtitleTracks() повертає 1 доріжку', Array.isArray(subs) && subs.length === 1, subs ? subs.length : 'null');
@@ -342,6 +364,12 @@ fakeAv.setSelectTrack = savedTrackApi.setSelectTrack;
 
 const size = engine.videoSize();
 check('videoSize() з getCurrentStreamInfo', size.width === 1920 && size.height === 1080, size.width + 'x' + size.height);
+
+const mediaInfo = engine.mediaInfo();
+check('mediaInfo(): H.264 / 1920×1080 / 23.976 FPS',
+    mediaInfo && mediaInfo.codec === 'H.264' && mediaInfo.width === 1920 &&
+    mediaInfo.height === 1080 && Math.abs(mediaInfo.fps - 23.976) < 0.001,
+    mediaInfo ? JSON.stringify(mediaInfo) : 'null');
 
 /* ---------- Події ---------- */
 

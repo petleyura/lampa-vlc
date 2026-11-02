@@ -2,7 +2,7 @@
 <html lang="uk">
 <head>
     <meta charset="utf-8">
-    <title>Lampa VLC Player — test harness (Stage 4.1)</title>
+    <title>Lampa VLC Player — test harness (Stage 6.1)</title>
     <style>
         html, body { margin: 0; padding: 0; background: #111; color: #ddd; font: 13px/1.4 Consolas, monospace; }
         #out { padding: 12px; white-space: pre-wrap; }
@@ -251,16 +251,16 @@
                 line(!!panel, '10. Debug Panel створена');
 
                 var title = panel ? panel.querySelector('.vlc-debug__title').textContent.trim() : '';
-                line(title === 'VLC PLAYER DEBUG', '11. Заголовок панелі', title);
+                line(title === 'ДІАГНОСТИКА ПЛЕЄРА', '11. Заголовок панелі', title);
 
                 line(debugValue('engine') === 'HTML5', '12. Рушій у панелі — HTML5', debugValue('engine'));
                 line(debugValue('source') === 'TorrServer', '13. Джерело визначено як TorrServer', debugValue('source'));
 
-                var states = ['INITIALIZING', 'LOADING', 'PLAYING', 'PAUSED', 'BUFFERING', 'ERROR', 'STOPPED'];
+                var states = ['ІНІЦІАЛІЗАЦІЯ', 'ЗАВАНТАЖЕННЯ', 'ВІДТВОРЕННЯ', 'ПАУЗА', 'БУФЕРИЗАЦІЯ', 'ПОМИЛКА', 'ЗУПИНЕНО'];
                 line(states.indexOf(debugValue('state')) > -1, '14. Стан плеєра відображається', debugValue('state'));
 
-                line(debugValue('resolution') === 'N/A', '15. Невідома роздільність — N/A', debugValue('resolution'));
-                line(debugValue('speed') === 'N/A', '16. Швидкість без даних — N/A', debugValue('speed'));
+                line(debugValue('resolution') === 'Н/Д', '15. Невідома роздільність — Н/Д', debugValue('resolution'));
+                line(debugValue('download') === 'Н/Д', '16. Швидкість без даних — Н/Д', debugValue('download'));
 
                 var events = panel ? panel.querySelectorAll('.vlc-debug__log > div').length : 0;
                 line(events > 0, '17. Журнал подій заповнюється', 'events=' + events);
@@ -283,7 +283,11 @@
                 line(debugValue('resolution') === '1920×1080', '18. Роздільність із videoWidth/videoHeight', debugValue('resolution'));
                 line(debugValue('duration') === '02:00', '19. Тривалість відображається', debugValue('duration'));
                 line(debugValue('time') === '00:10', '20. Поточний час відображається', debugValue('time'));
-                line(/^30\.0 s$/.test(debugValue('buffer')), '21. Буфер із video.buffered', debugValue('buffer'));
+                line(/^30\.0 с$/.test(debugValue('buffer')), '21. Буфер із video.buffered', debugValue('buffer'));
+                line(debugValue('video-format').indexOf('1920×1080') > -1,
+                    '21a. Формат відео містить роздільність', debugValue('video-format'));
+                line(debugValue('audio-tracks') === 'Н/Д',
+                    '21b. Аудіодоріжки без API — Н/Д', debugValue('audio-tracks'));
 
                 /* ---------- 21a-21d. Engine / Player Core ---------- */
                 var internal = api._internals || {};
@@ -314,8 +318,8 @@
                 var bufferingState = debugValue('state');
                 if (video) video.dispatchEvent(new Event('playing'));
                 await wait(30);
-                line(bufferingState === 'BUFFERING' && debugValue('state') === 'PLAYING',
-                    '22. Стани BUFFERING → PLAYING', bufferingState + '→' + debugValue('state'));
+                line(bufferingState === 'БУФЕРИЗАЦІЯ' && debugValue('state') === 'ВІДТВОРЕННЯ',
+                    '22. Стани БУФЕРИЗАЦІЯ → ВІДТВОРЕННЯ', bufferingState + '→' + debugValue('state'));
 
                 /* ---------- 23. Панель не блокує керування ---------- */
                 var pcs = panel ? getComputedStyle(panel) : null;
@@ -326,6 +330,59 @@
                 await wait(30);
                 line(T.media.playCount > beforePlay, '24. Кнопка Play/Pause продовжує працювати');
 
+                /* ---------- 24a-24g. Аудіодоріжки ---------- */
+                line(!!document.querySelector('[data-act="audio"]'), '24a. Є кнопка «Аудіодоріжка»');
+
+                click('[data-act="audio"]');
+                await wait(30);
+
+                var audioPanel = document.querySelector('.vlc-audio');
+                var audioStatus = document.querySelector('[data-audio-status]');
+                line(!!audioPanel && audioPanel.classList.contains('is-on'),
+                    '24b. Панель аудіодоріжок відкривається');
+                line(!!audioStatus && audioStatus.textContent.indexOf('не надає') > -1,
+                    '24c. Без audioTracks — зрозуміле повідомлення', audioStatus ? audioStatus.textContent : '');
+
+                click('[data-act="audio"]');
+                await wait(20);
+
+                if (video) {
+                    Object.defineProperty(video, 'audioTracks', {
+                        value: [
+                            { label: 'Українська', language: 'uk', enabled: true },
+                            { label: 'English', language: 'en', enabled: false }
+                        ],
+                        configurable: true
+                    });
+                }
+
+                click('[data-act="audio"]');
+                await wait(30);
+
+                var audioItems = document.querySelectorAll('.vlc-audio__item');
+                line(audioItems.length === 2, '24d. Список аудіодоріжок відображається', audioItems.length);
+                line(audioItems.length > 0 && audioItems[0].classList.contains('is-active'),
+                    '24e. Активна аудіодоріжка позначена');
+
+                var positionBeforeAudio = video ? video.currentTime : 0;
+                if (audioItems.length > 1) {
+                    audioItems[1].dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+                }
+                await wait(30);
+
+                line(video && video.audioTracks[1].enabled === true && video.audioTracks[0].enabled === false,
+                    '24f. Перемикання аудіодоріжки реально змінює enabled');
+                line(video && video.currentTime === positionBeforeAudio,
+                    '24g. Позиція відтворення не змінилася', video ? video.currentTime : 'n/a');
+
+                await wait(1100);
+                line(debugValue('audio-tracks').indexOf('English') > -1 &&
+                    debugValue('audio-tracks').indexOf('[активна]') > -1,
+                    '24h. Панель показує аудіодоріжки та активну', debugValue('audio-tracks'));
+
+                click('[data-act="audio"]');
+                await wait(20);
+
                 /* ---------- 25. Помилка ---------- */
                 if (video) {
                     Object.defineProperty(video, 'error', { value: { code: 4 }, configurable: true });
@@ -334,7 +391,7 @@
                 await wait(50);
 
                 var errTitle = debugValue('error');
-                line(debugValue('state') === 'ERROR', '25. Стан ERROR після помилки', debugValue('state'));
+                line(debugValue('state') === 'ПОМИЛКА', '25. Стан ПОМИЛКА після помилки', debugValue('state'));
                 line(errTitle.indexOf('4') === 0, '26. Код помилки в панелі', errTitle);
                 line(!!document.querySelector('.vlc-error.is-on'), '27. Помилка показана в інтерфейсі');
                 line(!!document.querySelector('[data-act="retry"]'), '28. Є кнопка повторної спроби');

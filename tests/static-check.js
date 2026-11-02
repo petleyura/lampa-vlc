@@ -59,10 +59,12 @@ check('fixed-позиціонування', /position:fixed/.test(src));
 check('object-fit: contain', /object-fit:contain/.test(src));
 check('SVG-логотип', /class="vlc-logo"/.test(src));
 check('Автоприховування панелі', /CONFIG\.uiHideDelay|uiHideDelay/.test(src));
-check('Кнопки play/back/fwd/settings/close',
-    ['data-act="toggle"', 'data-act="back"', 'data-act="fwd"', 'data-act="settings"', 'data-act="close"']
+check('Кнопки play/back/fwd/audio/settings/close',
+    ['data-act="toggle"', 'data-act="back"', 'data-act="fwd"', 'data-act="audio"', 'data-act="settings"', 'data-act="close"']
         .every(s => src.indexOf(s) > -1));
 check('Прогрес-бар з буфером і повзунком', /vlc-buffer/.test(src) && /vlc-thumb/.test(src));
+check('Панель аудіодоріжок', /vlc-audio/.test(src) && /data-audio-list/.test(src) && /АУДІОДОРІЖКА/.test(src));
+check('Отримання та перемикання аудіодоріжок', /function refreshAudioPanel/.test(src) && /function selectAudioTrack/.test(src));
 
 /* ---------- 6. Клавіатура ---------- */
 check('Space (32)', /code === 32/.test(src));
@@ -94,14 +96,18 @@ check('Гейт за вибором у Storage', /window\.Lampa\.Storage\.field\
 check('Пропуск, якщо VLC не вибрано', /if \(!isVlcSelected\(data\)\)/.test(src));
 
 /* ---------- 7.3. Етап 4.1: Debug Panel ---------- */
-check('Заголовок VLC PLAYER DEBUG', /VLC PLAYER DEBUG/.test(src));
-check('Стани INITIALIZING/LOADING/PLAYING/PAUSED/BUFFERING/ERROR/STOPPED',
-    ['INITIALIZING', 'LOADING', 'PLAYING', 'PAUSED', 'BUFFERING', 'ERROR', 'STOPPED']
+check('Заголовок ДІАГНОСТИКА ПЛЕЄРА', /ДІАГНОСТИКА ПЛЕЄРА/.test(src));
+check('Стани українською',
+    ['ІНІЦІАЛІЗАЦІЯ', 'ЗАВАНТАЖЕННЯ', 'ВІДТВОРЕННЯ', 'ПАУЗА', 'БУФЕРИЗАЦІЯ', 'ПОМИЛКА', 'ЗУПИНЕНО']
         .every(s => src.indexOf("'" + s + "'") > -1));
-check('Джерела LINK/TorrServer/IPTV/UNKNOWN',
-    ['LINK', 'TorrServer', 'IPTV', 'UNKNOWN'].every(s => src.indexOf("'" + s + "'") > -1));
-check('N/A для недоступних показників', /'N\/A'/.test(src));
-check('Позначка ESTIMATED', /ESTIMATED/.test(src));
+check('Джерела ПОСИЛАННЯ/TorrServer/IPTV/НЕВІДОМО',
+    ['ПОСИЛАННЯ', 'TorrServer', 'IPTV', 'НЕВІДОМО'].every(s => src.indexOf("'" + s + "'") > -1));
+check('Н/Д для недоступних показників', /'Н\/Д'/.test(src));
+check('Позначка ОЦІНКА', /ОЦІНКА/.test(src));
+check('Швидкість завантаження з Resource Timing', /ШВИДКІСТЬ ЗАВАНТАЖЕННЯ/.test(src) && /transferSize/.test(src) && /function createDownloadMeter/.test(src));
+check('Формат відео / аудіодоріжки в панелі', /ФОРМАТ ВІДЕО/.test(src) && /АУДІОДОРІЖКИ/.test(src));
+check('Метадані ffprobe без здогаду за URL', /function extractFfprobeMeta/.test(src) && /data\.ffprobe/.test(src));
+check('Оцінка швидкості за буфером', /bufferRate/.test(src) && /с\/с \(ОЦІНКА\)/.test(src));
 check('Панель не перехоплює кліки (pointer-events:none)', /\.vlc-debug\{[^}]*pointer-events:none/.test(src));
 check('Реальні video.buffered / videoWidth / videoHeight',
     /buffered\(\)/.test(src) && /videoWidth/.test(src) && /videoHeight/.test(src));
@@ -119,7 +125,10 @@ check('Player Core створює рушій через фабрику', /s\.eng
 check('Player Core монтує рушій через контракт', /s\.engine\.mount\(s\.ui\.root, s\.ui\.root\.firstChild\)/.test(src));
 check('Player Core не звертається до engine.el', !/s\.engine\.el/.test(src));
 check('Debug Panel бере ім’я рушія з engine.name', /dbg\(s, 'setEngine', s\.engine\.name/.test(src));
-check('audioTracks повертає null без API', /if \(!list \|\| !list\.length\) return null;/.test(src));
+check('audioTracks повертає null без API', /if \(!list\) return null;/.test(src));
+check('AVPlay: аудіометадані fourCC/channels/sample_rate', /fourCC/.test(src) && /sample_rate/.test(src) && /channels/.test(src));
+check('AVPlay: активна доріжка через getCurrentStreamInfo', /getCurrentStreamInfo/.test(src));
+check('Аудіо: активний вибір і збереження позиції', /setAudioActive/.test(src) && /Math\.abs\(after - before\) > 1\.5/.test(src));
 check('setSubtitleDelay не фейкує підтримку', /setSubtitleDelay: function \(\) \{\s*return false;/.test(src));
 
 /* ---------- 7.5. Етап 4.3: Tizen AVPlay ---------- */

@@ -1,10 +1,15 @@
 /*!
- * Lampa VLC Player — Stage 4.3
+ * Lampa VLC Player — Stage 6.1
  * ---------------------------------------------------------------------------
  * Незалежний HTML5-програвач для Lampa у стилі VLC.
  *
  * Перехоплення: Lampa.Player.listener 'create' -> e.abort() -> власний екран.
  * Штатний плеєр Lampa не створюється взагалі.
+ *
+ * Етап 6.1:
+ *  - українська Debug Panel (підписи, стани, події, помилки);
+ *  - вибір аудіодоріжок у UI (HTML5 audioTracks / Tizen AVPlay);
+ *  - збереження позиції під час перемикання доріжки.
  *
  * Етап 4.3:
  *  - TizenAvplayEngine (Samsung AVPlay) через той самий ENGINE_CONTRACT;
@@ -19,7 +24,7 @@
  * Етап 4.1:
  *  - пункт «VLC Player» у налаштуваннях Lampa (player / player_torrent / player_iptv);
  *  - перехоплення лише коли відповідне налаштування = 'vlc';
- *  - технічна панель діагностики (VLC PLAYER DEBUG) з реальними метриками HTML5.
+ *  - технічна панель діагностики (ДІАГНОСТИКА ПЛЕЄРА) з реальними метриками HTML5.
  *
  * Залежності: лише публічні об'єкти window.Lampa (без змін файлів Lampa).
  * Ціль: ПК / Chrome / Opera; архітектура готова до Tizen/webOS/Android TV.
@@ -40,7 +45,7 @@
         return;
     }
 
-    var VERSION = '0.5.0';
+    var VERSION = '0.6.0';
 
     var CONFIG = {
         zIndex: 2147483000,
@@ -52,6 +57,27 @@
         menuOption: 'vlc',      // значення в Storage: player = 'vlc'
         menuLabel: 'VLC Player',
         debug: /[?&]vlcdebug=1/.test(window.location.search)
+    };
+
+    /**
+     * Українські підписи для Debug Panel.
+     * Технічні назви (HTML5, AVPlay, H.264, AC-3 тощо) не перекладаються.
+     */
+    var DEBUG_STATE_LABELS = {
+        INITIALIZING: 'ІНІЦІАЛІЗАЦІЯ',
+        LOADING: 'ЗАВАНТАЖЕННЯ',
+        PLAYING: 'ВІДТВОРЕННЯ',
+        PAUSED: 'ПАУЗА',
+        BUFFERING: 'БУФЕРИЗАЦІЯ',
+        ERROR: 'ПОМИЛКА',
+        STOPPED: 'ЗУПИНЕНО'
+    };
+
+    var DEBUG_SOURCE_LABELS = {
+        LINK: 'ПОСИЛАННЯ',
+        TorrServer: 'TorrServer',
+        IPTV: 'IPTV',
+        UNKNOWN: 'НЕВІДОМО'
     };
 
     /* =====================================================================
@@ -134,6 +160,9 @@
                    '<text x="11.8" y="16.3" text-anchor="middle" font-size="6.4" font-family="Arial, sans-serif" fill="currentColor">10</text>'),
 
         gear: svg('<path d="M12 8.6A3.4 3.4 0 1 0 12 15.4 3.4 3.4 0 0 0 12 8.6zm9 4.6l1.7 1.3-1.7 3-2.1-.8a7.7 7.7 0 0 1-1.9 1.1l-.3 2.2h-3.4l-.3-2.2a7.7 7.7 0 0 1-1.9-1.1l-2.1.8-1.7-3L9 13.2a7.6 7.6 0 0 1 0-2.4L7.3 9.5l1.7-3 2.1.8a7.7 7.7 0 0 1 1.9-1.1l.3-2.2h3.4l.3 2.2a7.7 7.7 0 0 1 1.9 1.1l2.1-.8 1.7 3-1.7 1.3a7.6 7.6 0 0 1 0 2.4z" fill="currentColor"/>'),
+
+        audio: svg('<path d="M4 9h3.2L12 5v14l-4.8-4H4z" fill="currentColor"/>' +
+                   '<path d="M15 8.2a5.2 5.2 0 0 1 0 7.6M17.6 5.6a8.6 8.6 0 0 1 0 12.8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>'),
 
         close: svg('<path d="M6.2 5l5.8 5.8L17.8 5 19 6.2 13.2 12 19 17.8 17.8 19 12 13.2 6.2 19 5 17.8 10.8 12 5 6.2z" fill="currentColor"/>'),
 
@@ -242,6 +271,26 @@
         'background:transparent;color:#ddd;font-size:12px;cursor:pointer}',
         '.vlc-rate.is-active{border-color:#FF8800;color:#FF8800;background:rgba(255,136,0,.12)}',
 
+        /* аудіодоріжки */
+        '.vlc-audio{position:absolute;right:20px;bottom:86px;width:380px;max-height:70vh;overflow:auto;',
+        'padding:14px 16px;border-radius:12px;background:rgba(22,22,22,.97);border:1px solid rgba(255,255,255,.09);',
+        'box-shadow:0 18px 40px rgba(0,0,0,.55);display:none;pointer-events:auto;z-index:7}',
+        '.vlc-audio.is-on{display:block}',
+        '.vlc-audio__title{font-size:12px;letter-spacing:1.2px;text-transform:uppercase;color:#FF8800;margin-bottom:10px}',
+        '.vlc-audio__status{font-size:12.5px;line-height:1.45;color:#bdbdbd;margin-bottom:8px;white-space:normal}',
+        '.vlc-audio__status.is-error{color:#ff8a80}',
+        '.vlc-audio__list{display:flex;flex-direction:column;gap:6px}',
+        '.vlc-audio__item{display:flex;align-items:flex-start;gap:10px;width:100%;padding:9px 10px;border-radius:8px;',
+        'border:1px solid rgba(255,255,255,.12);background:transparent;color:#eee;text-align:left;cursor:pointer;',
+        'font:inherit;pointer-events:auto}',
+        '.vlc-audio__item:hover,.vlc-audio__item:focus{outline:none;border-color:rgba(255,136,0,.65);background:rgba(255,136,0,.10)}',
+        '.vlc-audio__item.is-active{border-color:#FF8800;background:rgba(255,136,0,.14)}',
+        '.vlc-audio__num{flex:0 0 auto;min-width:18px;color:#FF8800;font-weight:700;font-variant-numeric:tabular-nums}',
+        '.vlc-audio__body{min-width:0;display:flex;flex-direction:column;gap:2px}',
+        '.vlc-audio__name{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
+        '.vlc-audio__meta{font-size:11.5px;color:#a9a9a9;line-height:1.35;word-break:break-word}',
+        '.vlc-audio__empty{font-size:12.5px;line-height:1.5;color:#bdbdbd;white-space:normal}',
+
         /* помилка */
         '.vlc-error{display:none;pointer-events:auto;max-width:520px;margin:0 24px;padding:26px 28px;',
         'border-radius:14px;background:rgba(20,20,20,.96);border:1px solid rgba(255,136,0,.35);',
@@ -268,6 +317,8 @@
         '.vlc-debug__row{display:flex;gap:8px;justify-content:space-between;white-space:nowrap}',
         '.vlc-debug__row>span{color:#8f8f8f}',
         '.vlc-debug__row>b{color:#eee;font-weight:600;overflow:hidden;text-overflow:ellipsis;max-width:190px}',
+        '.vlc-debug__row--wide>span{flex:0 0 auto;max-width:46%}',
+        '.vlc-debug__row--wide>b{white-space:pre-line;overflow:visible;text-overflow:clip;text-align:right;max-width:230px;line-height:1.35}',
         '.vlc-debug__log-title{color:#FF8800;margin:6px 0 3px;font-weight:700;letter-spacing:.8px}',
         '.vlc-debug__log{max-height:116px;overflow:hidden}',
         '.vlc-debug__log>div{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;color:#bdbdbd}',
@@ -281,9 +332,11 @@
         '.vlc-btn{min-width:34px;height:34px;padding:0 4px}',
         '.vlc-btn .vlc-ico{width:19px;height:19px}',
         '.vlc-settings{right:10px;left:10px;width:auto;bottom:74px}',
+        '.vlc-audio{right:10px;left:10px;width:auto;bottom:74px;max-height:65vh}',
         '.vlc-error{margin:0 12px;padding:18px}',
         '.vlc-debug{top:44px;left:8px;max-width:240px;font-size:9px}',
         '.vlc-debug__row>b{max-width:130px}',
+        '.vlc-debug__row--wide>b{max-width:150px}',
         '}',
 
         'body.vlc-open{overflow:hidden !important}'
@@ -446,7 +499,7 @@
                     return;
                 }
 
-                hooks.onError(code);
+                hooks.onError(code, video.error && video.error.message ? video.error.message : '');
             }));
         }
 
@@ -561,21 +614,25 @@
 
             /**
              * Аудіодоріжки HTML5.
-             * @returns {Array|null} null — API недоступне або доріжок немає
+             * @returns {Array|null} null — API недоступне; [] — API є, але доріжок немає
              * (Chromium зазвичай не реалізує HTMLMediaElement.audioTracks).
              */
             audioTracks: function () {
                 try {
                     var list = video.audioTracks;
-                    if (!list || !list.length) return null;
+                    if (!list) return null;
 
                     var out = [];
 
                     for (var i = 0; i < list.length; i++) {
                         out.push({
                             index: i,
-                            label: list[i].label || list[i].language || ('Track ' + (i + 1)),
+                            label: list[i].label || list[i].language || ('Доріжка ' + (i + 1)),
+                            title: list[i].label || '',
                             language: list[i].language || '',
+                            codec: '',
+                            channels: '',
+                            sampleRate: '',
                             enabled: !!list[i].enabled
                         });
                     }
@@ -588,13 +645,16 @@
 
             /**
              * @returns {boolean} true лише якщо доріжку реально перемкнено.
+             * Не перезапускає відео: змінює лише enabled у audioTracks.
              */
             selectAudio: function (index) {
                 try {
                     var list = video.audioTracks;
-                    if (!list || !list.length || !list[index]) return false;
+                    var target = parseInt(index, 10);
 
-                    for (var i = 0; i < list.length; i++) list[i].enabled = (i === index);
+                    if (!list || !list.length || !isFinite(target) || !list[target]) return false;
+
+                    for (var i = 0; i < list.length; i++) list[i].enabled = (i === target);
 
                     return true;
                 } catch (e) {
@@ -616,7 +676,7 @@
                     for (var i = 0; i < list.length; i++) {
                         out.push({
                             index: i,
-                            label: list[i].label || list[i].language || ('Subtitle ' + (i + 1)),
+                            label: list[i].label || list[i].language || ('Субтитри ' + (i + 1)),
                             language: list[i].language || '',
                             mode: list[i].mode
                         });
@@ -745,6 +805,7 @@
         var rate = 1;
         var size = { width: 0, height: 0, time: 0 };
         var resizeTimer = null;
+        var activeAudioIndex = -1;
 
         function fail(code, message) {
             if (destroyed) return;
@@ -780,6 +841,7 @@
             opened = false;
             prepared = false;
             state = 'none';
+            activeAudioIndex = -1;
         }
 
         function bindListener() {
@@ -821,6 +883,43 @@
             }
         }
 
+        function parseTrackExtra(raw) {
+            try {
+                return JSON.parse(raw || '{}') || {};
+            } catch (e) {
+                return {};
+            }
+        }
+
+        function audioExtraMeta(extra) {
+            return {
+                title: extra.title || extra.track_title || '',
+                codec: extra.fourCC || extra.fourcc || extra.codec || '',
+                channels: extra.channels || '',
+                sampleRate: extra.sample_rate || extra.sampleRate || '',
+                bitrate: extra.bit_rate || extra.bitrate || ''
+            };
+        }
+
+        function currentAudioIndex() {
+            try {
+                if (av && typeof av.getCurrentStreamInfo === 'function') {
+                    var current = av.getCurrentStreamInfo();
+
+                    if (current && current.length) {
+                        for (var i = 0; i < current.length; i++) {
+                            if (current[i] && current[i].type === 'AUDIO') {
+                                var index = parseInt(current[i].index, 10);
+                                if (isFinite(index)) return index;
+                            }
+                        }
+                    }
+                }
+            } catch (e) { /* ignore */ }
+
+            return activeAudioIndex;
+        }
+
         function tracks(type) {
             if (!av || !prepared || !hasAvplayTracks(av)) return null;
             if (['ready', 'playing', 'paused'].indexOf(state) === -1) return null;
@@ -830,18 +929,25 @@
                 if (!info || !info.length) return [];
 
                 var out = [];
+                var currentAudio = (type === 'AUDIO') ? currentAudioIndex() : -1;
 
                 for (var i = 0; i < info.length; i++) {
                     if (info[i].type !== type) continue;
 
-                    var extra = {};
-
-                    try { extra = JSON.parse(info[i].extra_info || '{}'); } catch (e) { extra = {}; }
+                    var extra = parseTrackExtra(info[i].extra_info);
+                    var meta = (type === 'AUDIO') ? audioExtraMeta(extra) : {};
+                    var trackIndex = parseInt(info[i].index, 10);
+                    var language = extra.language || extra.track_lang || '';
 
                     out.push({
-                        index: parseInt(info[i].index, 10),
-                        label: extra.language || extra.track_lang || ((type === 'AUDIO' ? 'Audio ' : 'Subtitle ') + info[i].index),
-                        language: extra.language || extra.track_lang || '',
+                        index: trackIndex,
+                        label: language || ((type === 'AUDIO' ? 'Аудіо ' : 'Субтитри ') + info[i].index),
+                        title: meta.title || '',
+                        language: language,
+                        codec: meta.codec || '',
+                        channels: meta.channels || '',
+                        sampleRate: meta.sampleRate || '',
+                        enabled: type === 'AUDIO' ? (trackIndex === currentAudio) : false,
                         extra: extra
                     });
                 }
@@ -897,6 +1003,7 @@
                 state = 'idle';
                 paused = true;
                 rate = 1;
+                activeAudioIndex = -1;
 
                 try {
                     av.open(url);
@@ -1071,20 +1178,55 @@
                 return { width: size.width, height: size.height };
             },
 
+            /**
+             * Додаткова (необов'язкова) інформація про поточний відеопотік.
+             * Не входить до ENGINE_CONTRACT; Player Core використовує її лише
+             * для діагностики, якщо рушій її надає.
+             */
+            mediaInfo: function () {
+                if (!av || !prepared || typeof av.getCurrentStreamInfo !== 'function') return null;
+
+                try {
+                    var info = av.getCurrentStreamInfo();
+
+                    if (info) {
+                        for (var i = 0; i < info.length; i++) {
+                            if (info[i].type !== 'VIDEO') continue;
+
+                            var raw = info[i].extra_info;
+                            var extra = (typeof raw === 'string') ? parseTrackExtra(raw) : (raw || {});
+
+                            return {
+                                container: '',
+                                codec: videoCodecName(extra.fourCC || extra.fourcc || extra.codec || ''),
+                                width: extra.width || extra.Width || 0,
+                                height: extra.height || extra.Height || 0,
+                                fps: parseFrameRate(extra.frame_rate || extra.FrameRate || extra.fps)
+                            };
+                        }
+                    }
+                } catch (e) { /* ignore */ }
+
+                return null;
+            },
+
             audioTracks: function () {
                 return tracks('AUDIO');
             },
 
             selectAudio: function (index) {
                 var list = tracks('AUDIO');
+                var target = parseInt(index, 10);
 
-                if (!list || !list.length) return false;
+                if (!list || !list.length || !isFinite(target)) return false;
+                if (['ready', 'playing', 'paused'].indexOf(state) === -1) return false;
 
                 for (var i = 0; i < list.length; i++) {
-                    if (list[i].index !== index) continue;
+                    if (list[i].index !== target) continue;
 
                     try {
-                        av.setSelectTrack('AUDIO', index);
+                        av.setSelectTrack('AUDIO', target);
+                        activeAudioIndex = target;
                         return true;
                     } catch (e) {
                         return false;
@@ -1246,6 +1388,7 @@
                     '<div class="vlc-live"><i></i><span>LIVE</span></div>',
                     '<div class="vlc-spacer"></div>',
                     '<div class="vlc-group">',
+                        '<button type="button" class="vlc-btn" data-act="audio" aria-label="Аудіодоріжка">' + ICONS.audio + '</button>',
                         '<button type="button" class="vlc-btn" data-act="settings" aria-label="Налаштування">' + ICONS.gear + '</button>',
                         '<button type="button" class="vlc-btn vlc-btn--close" data-act="close" aria-label="Закрити">' + ICONS.close + '</button>',
                     '</div>',
@@ -1268,18 +1411,26 @@
                 '</div>',
             '</div>',
 
+            '<div class="vlc-audio" aria-hidden="true">',
+                '<div class="vlc-audio__title">АУДІОДОРІЖКА</div>',
+                '<div class="vlc-audio__status" data-audio-status></div>',
+                '<div class="vlc-audio__list" data-audio-list></div>',
+            '</div>',
+
             '<div class="vlc-debug" aria-hidden="true">',
-                '<div class="vlc-debug__title">VLC PLAYER DEBUG</div>',
-                '<div class="vlc-debug__row"><span>STATE</span><b data-d="state">INITIALIZING</b></div>',
-                '<div class="vlc-debug__row"><span>SOURCE</span><b data-d="source">UNKNOWN</b></div>',
-                '<div class="vlc-debug__row"><span>TIME</span><b data-d="time">N/A</b></div>',
-                '<div class="vlc-debug__row"><span>DURATION</span><b data-d="duration">N/A</b></div>',
-                '<div class="vlc-debug__row"><span>RESOLUTION</span><b data-d="resolution">N/A</b></div>',
-                '<div class="vlc-debug__row"><span>DOWNLOAD</span><b data-d="speed">N/A</b></div>',
-                '<div class="vlc-debug__row"><span>BUFFER</span><b data-d="buffer">N/A</b></div>',
-                '<div class="vlc-debug__row"><span>ENGINE</span><b data-d="engine">HTML5</b></div>',
-                '<div class="vlc-debug__row"><span>LAST ERROR</span><b data-d="error">—</b></div>',
-                '<div class="vlc-debug__log-title">EVENTS</div>',
+                '<div class="vlc-debug__title">ДІАГНОСТИКА ПЛЕЄРА</div>',
+                '<div class="vlc-debug__row"><span>СТАН</span><b data-d="state">ІНІЦІАЛІЗАЦІЯ</b></div>',
+                '<div class="vlc-debug__row"><span>ДЖЕРЕЛО</span><b data-d="source">НЕВІДОМО</b></div>',
+                '<div class="vlc-debug__row"><span>ЧАС</span><b data-d="time">Н/Д</b></div>',
+                '<div class="vlc-debug__row"><span>ТРИВАЛІСТЬ</span><b data-d="duration">Н/Д</b></div>',
+                '<div class="vlc-debug__row"><span>РОЗДІЛЬНА ЗДАТНІСТЬ</span><b data-d="resolution">Н/Д</b></div>',
+                '<div class="vlc-debug__row"><span>ШВИДКІСТЬ ЗАВАНТАЖЕННЯ</span><b data-d="download">Н/Д</b></div>',
+                '<div class="vlc-debug__row vlc-debug__row--wide"><span>ФОРМАТ ВІДЕО</span><b data-d="video-format">Н/Д</b></div>',
+                '<div class="vlc-debug__row vlc-debug__row--wide"><span>АУДІОДОРІЖКИ</span><b data-d="audio-tracks">Н/Д</b></div>',
+                '<div class="vlc-debug__row"><span>БУФЕР</span><b data-d="buffer">Н/Д</b></div>',
+                '<div class="vlc-debug__row"><span>РУШІЙ</span><b data-d="engine">HTML5</b></div>',
+                '<div class="vlc-debug__row"><span>ОСТАННЯ ПОМИЛКА</span><b data-d="error">—</b></div>',
+                '<div class="vlc-debug__log-title">ПОДІЇ</div>',
                 '<div class="vlc-debug__log" data-d="log"></div>',
             '</div>'
         ].join('');
@@ -1302,6 +1453,10 @@
             live: root.querySelector('.vlc-live'),
             toggle: root.querySelector('[data-act="toggle"]'),
             settings: root.querySelector('.vlc-settings'),
+            audio: root.querySelector('.vlc-audio'),
+            audioButton: root.querySelector('[data-act="audio"]'),
+            audioList: root.querySelector('[data-audio-list]'),
+            audioStatus: root.querySelector('[data-audio-status]'),
             infoEngine: root.querySelector('[data-info="engine"]'),
             infoSize: root.querySelector('[data-info="size"]'),
             infoBuffer: root.querySelector('[data-info="buffer"]'),
@@ -1317,6 +1472,10 @@
             return refs.settings.classList.contains('is-on');
         }
 
+        function isAudioOpen() {
+            return refs.audio.classList.contains('is-on');
+        }
+
         function clearHideTimer() {
             clearTimeout(hideTimer);
             hideTimer = null;
@@ -1324,11 +1483,11 @@
 
         function scheduleHide() {
             clearHideTimer();
-            if (session.ended || session.errorCode || isSettingsOpen()) return;
+            if (session.ended || session.errorCode || isSettingsOpen() || isAudioOpen()) return;
             if (session.engine && session.engine.paused()) return;
 
             hideTimer = setTimeout(function () {
-                if (session.ended || session.errorCode || isSettingsOpen()) return;
+                if (session.ended || session.errorCode || isSettingsOpen() || isAudioOpen()) return;
                 if (session.engine && session.engine.paused()) return;
                 hide();
             }, CONFIG.uiHideDelay);
@@ -1343,7 +1502,7 @@
         }
 
         function hide() {
-            if (isSettingsOpen()) return;
+            if (isSettingsOpen() || isAudioOpen()) return;
             uiVisible = false;
             root.classList.remove('is-ui');
             clearHideTimer();
@@ -1415,6 +1574,7 @@
         }
 
         function openSettings() {
+            closeAudio();
             refs.settings.classList.add('is-on');
             show();
             clearHideTimer();
@@ -1428,6 +1588,127 @@
         function toggleSettings() {
             if (isSettingsOpen()) closeSettings();
             else openSettings();
+        }
+
+        function openAudio() {
+            closeSettings();
+            refs.audio.classList.add('is-on');
+            refs.audio.setAttribute('aria-hidden', 'false');
+            show();
+            clearHideTimer();
+        }
+
+        function closeAudio() {
+            refs.audio.classList.remove('is-on');
+            refs.audio.setAttribute('aria-hidden', 'true');
+            scheduleHide();
+        }
+
+        function toggleAudio() {
+            if (isAudioOpen()) closeAudio();
+            else openAudio();
+        }
+
+        function audioButtons() {
+            return Array.prototype.slice.call(refs.audioList.querySelectorAll('[data-audio-index]'));
+        }
+
+        function setAudioStatus(text, isError) {
+            refs.audioStatus.textContent = text || '';
+            refs.audioStatus.classList.toggle('is-error', !!isError);
+        }
+
+        function clearAudio() {
+            refs.audioList.innerHTML = '';
+            setAudioStatus('', false);
+        }
+
+        function renderAudio(tracks) {
+            refs.audioList.innerHTML = '';
+
+            if (!tracks || !tracks.length) {
+                setAudioStatus('Аудіодоріжки не знайдені.', false);
+                return;
+            }
+
+            setAudioStatus('', false);
+
+            tracks.forEach(function (track) {
+                var item = document.createElement('button');
+                item.type = 'button';
+                item.className = 'vlc-audio__item' + (track.enabled ? ' is-active' : '');
+                item.setAttribute('data-audio-index', String(track.index));
+                item.setAttribute('aria-pressed', track.enabled ? 'true' : 'false');
+
+                var num = document.createElement('span');
+                num.className = 'vlc-audio__num';
+                num.textContent = String(track.number);
+
+                var body = document.createElement('span');
+                body.className = 'vlc-audio__body';
+
+                var name = document.createElement('span');
+                name.className = 'vlc-audio__name';
+                name.textContent = track.title || track.language || ('Доріжка ' + track.number);
+
+                var meta = document.createElement('span');
+                meta.className = 'vlc-audio__meta';
+                meta.textContent = [
+                    track.language,
+                    track.codec,
+                    track.channels,
+                    track.sampleRate
+                ].filter(function (value) { return !!value; }).join(' · ') || 'Н/Д';
+
+                body.appendChild(name);
+                body.appendChild(meta);
+                item.appendChild(num);
+                item.appendChild(body);
+                refs.audioList.appendChild(item);
+            });
+        }
+
+        function setAudioActive(index) {
+            var items = audioButtons();
+            var target = String(index);
+
+            items.forEach(function (item) {
+                var active = item.getAttribute('data-audio-index') === target;
+                item.classList.toggle('is-active', active);
+                item.setAttribute('aria-pressed', active ? 'true' : 'false');
+            });
+        }
+
+        function focusAudio(index) {
+            var items = audioButtons();
+            if (!items.length) return false;
+
+            var target = String(index);
+            var found = null;
+
+            items.forEach(function (item) {
+                if (item.getAttribute('data-audio-index') === target) found = item;
+            });
+
+            (found || items[0]).focus();
+            return true;
+        }
+
+        function moveAudioFocus(delta) {
+            var items = audioButtons();
+            if (!items.length) return false;
+
+            var current = items.indexOf(document.activeElement);
+            if (current === -1) current = 0;
+            else current = clamp(current + delta, 0, items.length - 1);
+
+            items[current].focus();
+            return true;
+        }
+
+        function selectedAudioIndex() {
+            var active = refs.audioList.querySelector('.vlc-audio__item.is-active');
+            return active ? active.getAttribute('data-audio-index') : null;
         }
 
         function setActiveRate(rate) {
@@ -1538,6 +1819,17 @@
             toggleSettings: toggleSettings,
             closeSettings: closeSettings,
             isSettingsOpen: isSettingsOpen,
+            isAudioOpen: isAudioOpen,
+            toggleAudio: toggleAudio,
+            openAudio: openAudio,
+            closeAudio: closeAudio,
+            renderAudio: renderAudio,
+            setAudioStatus: setAudioStatus,
+            setAudioActive: setAudioActive,
+            moveAudioFocus: moveAudioFocus,
+            focusAudio: focusAudio,
+            selectedAudioIndex: selectedAudioIndex,
+            clearAudio: clearAudio,
             showError: showError,
             clearError: clearError,
 
@@ -1582,7 +1874,7 @@
             var node = fields[name];
             if (!node) return;
 
-            var text = (value === undefined || value === null || value === '') ? 'N/A' : String(value);
+            var text = (value === undefined || value === null || value === '') ? 'Н/Д' : String(value);
 
             try { node.textContent = text; } catch (e) { /* ignore */ }
         }
@@ -1602,11 +1894,11 @@
             },
 
             setSource: function (source) {
-                set('source', source || 'UNKNOWN');
+                set('source', source || 'НЕВІДОМО');
             },
 
             setEngine: function (engine) {
-                set('engine', engine || 'N/A');
+                set('engine', engine || 'Н/Д');
             },
 
             setError: function (code, text) {
@@ -1617,7 +1909,7 @@
                     return;
                 }
 
-                set('error', code + ' · ' + (text || 'unknown'));
+                set('error', code + ' · ' + (text || 'невідомо'));
             },
 
             event: function (text) {
@@ -1664,16 +1956,16 @@
      * @returns {string} LINK | TorrServer | IPTV | UNKNOWN
      */
     function detectSource(data, url) {
-        if (data && data.iptv) return 'IPTV';
-        if (data && (data.torrent_hash || data.torrent)) return 'TorrServer';
+        if (data && data.iptv) return DEBUG_SOURCE_LABELS.IPTV;
+        if (data && (data.torrent_hash || data.torrent)) return DEBUG_SOURCE_LABELS.TorrServer;
 
         if (typeof url === 'string') {
-            if (/\/stream\/|\/gst\//.test(url)) return 'TorrServer';
-            if (/^https?:\/\//i.test(url)) return 'LINK';
-            if (/^magnet:/i.test(url)) return 'TorrServer';
+            if (/\/stream\/|\/gst\//.test(url)) return DEBUG_SOURCE_LABELS.TorrServer;
+            if (/^https?:\/\//i.test(url)) return DEBUG_SOURCE_LABELS.LINK;
+            if (/^magnet:/i.test(url)) return DEBUG_SOURCE_LABELS.TorrServer;
         }
 
-        return 'UNKNOWN';
+        return DEBUG_SOURCE_LABELS.UNKNOWN;
     }
 
     /**
@@ -1727,6 +2019,306 @@
     }
 
     /* =====================================================================
+     * 6.2. Швидкість завантаження та метадані потоку
+     * ---------------------------------------------------------------------
+     * Швидкість завантаження — лише фактичні transferSize з Resource Timing
+     * або явно позначена оцінка за приростом буфера. Жодних додаткових
+     * мережевих запитів для діагностики не створюємо.
+     * ===================================================================== */
+
+    function formatBytesPerSecond(bytes) {
+        if (typeof bytes !== 'number' || !isFinite(bytes) || bytes < 0) return '';
+
+        var units = ['Б/с', 'КБ/с', 'МБ/с', 'ГБ/с'];
+        var value = bytes;
+        var unit = 0;
+
+        while (value >= 1024 && unit < units.length - 1) {
+            value /= 1024;
+            unit++;
+        }
+
+        var digits = value >= 10 ? 0 : 1;
+        return value.toFixed(digits).replace('.', ',') + ' ' + units[unit];
+    }
+
+    function formatDownload(sample) {
+        if (!sample || sample.mode === 'unavailable') return 'Н/Д';
+
+        if (sample.mode === 'actual' && typeof sample.speed === 'number' && isFinite(sample.speed) && sample.speed >= 0) {
+            return formatBytesPerSecond(sample.speed);
+        }
+
+        if (sample.mode === 'buffer') {
+            if (typeof sample.speed === 'number' && isFinite(sample.speed) && sample.speed >= 0) {
+                return '≈ ' + formatBytesPerSecond(sample.speed) + ' (ОЦІНКА)';
+            }
+
+            if (isFinite(sample.bufferRate) && sample.bufferRate > 0) {
+                return '≈ ' + sample.bufferRate.toFixed(1).replace('.', ',') + ' с/с (ОЦІНКА)';
+            }
+        }
+
+        return 'Н/Д';
+    }
+
+    /**
+     * @param {string} url
+     * @returns {{reset: Function, sample: Function}}
+     */
+    function createDownloadMeter(url) {
+        var lastTransfer = -1;
+        var lastTransferTime = 0;
+        var lastBuffer = 0;
+        var lastBufferTime = 0;
+        var speed = null;
+        var bufferRate = 0;
+        var mode = 'unavailable';
+
+        function transferBytes() {
+            if (!window.performance || typeof window.performance.getEntriesByName !== 'function') return -1;
+
+            try {
+                var entries = window.performance.getEntriesByName(url) || [];
+                var total = 0;
+                var found = false;
+
+                for (var i = 0; i < entries.length; i++) {
+                    var size = entries[i].transferSize;
+
+                    if (typeof size === 'number' && size > 0) {
+                        total += size;
+                        found = true;
+                    }
+                }
+
+                return found ? total : -1;
+            } catch (e) {
+                return -1;
+            }
+        }
+
+        return {
+            reset: function () {
+                lastTransfer = -1;
+                lastTransferTime = 0;
+                lastBuffer = 0;
+                lastBufferTime = 0;
+                speed = null;
+                bufferRate = 0;
+                mode = 'unavailable';
+            },
+
+            sample: function (bufferedEnd, bitrate) {
+                var now = Date.now();
+                var total = transferBytes();
+
+                if (total >= 0) {
+                    if (lastTransfer >= 0 && total >= lastTransfer && now > lastTransferTime) {
+                        speed = (total - lastTransfer) * 1000 / (now - lastTransferTime);
+                        mode = 'actual';
+                    }
+
+                    lastTransfer = total;
+                    lastTransferTime = now;
+
+                    if (mode === 'actual') {
+                        return { mode: mode, speed: speed, bufferRate: bufferRate };
+                    }
+                }
+
+                if (isFinite(bufferedEnd) && bufferedEnd > 0) {
+                    if (lastBuffer > 0 && bufferedEnd >= lastBuffer && now > lastBufferTime) {
+                        bufferRate = (bufferedEnd - lastBuffer) * 1000 / (now - lastBufferTime);
+
+                        if (isFinite(bitrate) && bitrate > 0) {
+                            speed = bufferRate * bitrate / 8;
+                        } else {
+                            speed = null;
+                        }
+
+                        mode = 'buffer';
+                    } else if (bufferedEnd < lastBuffer) {
+                        bufferRate = 0;
+                        speed = null;
+                        mode = 'buffer';
+                    }
+
+                    lastBuffer = bufferedEnd;
+                    lastBufferTime = now;
+                } else if (mode !== 'actual') {
+                    speed = null;
+                    bufferRate = 0;
+                    mode = 'unavailable';
+                }
+
+                return { mode: mode, speed: speed, bufferRate: bufferRate };
+            }
+        };
+    }
+
+    function parseFrameRate(value) {
+        if (typeof value === 'number' && isFinite(value)) return value;
+
+        var text = String(value || '').trim();
+        if (!text) return 0;
+
+        if (text.indexOf('/') >= 0) {
+            var parts = text.split('/');
+            var num = parseFloat(parts[0]);
+            var den = parseFloat(parts[1]);
+
+            return (isFinite(num) && isFinite(den) && den > 0) ? num / den : 0;
+        }
+
+        var parsed = parseFloat(text);
+        return isFinite(parsed) ? parsed : 0;
+    }
+
+    function formatFrameRate(value) {
+        var rate = parseFrameRate(value);
+        if (!rate || rate <= 0) return '';
+
+        return rate.toFixed(3).replace(/\.?0+$/, '') + ' FPS';
+    }
+
+    function containerName(value) {
+        var text = String(value || '').toLowerCase();
+        if (!text) return '';
+
+        if (text.indexOf('matroska') >= 0) return 'MKV';
+        if (text.indexOf('webm') >= 0) return 'WebM';
+        if (text.indexOf('mp4') >= 0 || text.indexOf('mov') >= 0) return 'MP4';
+        if (text.indexOf('mpegts') >= 0) return 'TS';
+        if (text.indexOf('avi') >= 0) return 'AVI';
+
+        return String(value);
+    }
+
+    function videoCodecName(value) {
+        var text = String(value || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+
+        if (text === 'h264' || text === 'avc' || text === 'avc1') return 'H.264';
+        if (text === 'hevc' || text === 'h265' || text === 'hvc1' || text === 'hev1') return 'HEVC';
+        if (text === 'av1' || text === 'av01') return 'AV1';
+        if (text === 'vp9' || text === 'vp09') return 'VP9';
+        if (text === 'vp8') return 'VP8';
+        if (text === 'mpeg2video' || text === 'mpeg2') return 'MPEG-2';
+
+        return String(value || '');
+    }
+
+    /**
+     * Метадані з data.ffprobe (якщо Lampa/торент-плагін їх передав).
+     * Це фактичні метадані, а не здогад за розширенням URL.
+     */
+    function extractFfprobeMeta(data) {
+        var probe = data && data.ffprobe;
+        if (!probe || !probe.streams || !probe.streams.length) return null;
+
+        var format = probe.format || {};
+        var video = null;
+        var audio = [];
+
+        for (var i = 0; i < probe.streams.length; i++) {
+            var stream = probe.streams[i];
+            if (!stream) continue;
+
+            if (stream.codec_type === 'video' && !video) video = stream;
+
+            if (stream.codec_type === 'audio') {
+                var tags = stream.tags || {};
+
+                audio.push({
+                    index: stream.index,
+                    number: audio.length + 1,
+                    language: tags.language || tags.LANGUAGE || '',
+                    title: tags.title || tags.TITLE || '',
+                    codec: audioCodecLabel(stream.codec_name),
+                    channels: stream.channels,
+                    sampleRate: stream.sample_rate,
+                    default: !!(stream.disposition && stream.disposition.default)
+                });
+            }
+        }
+
+        var bitrate = parseFloat(format.bit_rate);
+        if (!isFinite(bitrate) || bitrate <= 0) {
+            var size = parseFloat(format.size);
+            var duration = parseFloat(format.duration);
+
+            if (isFinite(size) && isFinite(duration) && duration > 0) bitrate = size * 8 / duration;
+        }
+
+        return {
+            container: containerName(format.format_name),
+            codec: video ? videoCodecName(video.codec_name) : '',
+            width: video ? (video.width || 0) : 0,
+            height: video ? (video.height || 0) : 0,
+            fps: video ? parseFrameRate(video.r_frame_rate || video.avg_frame_rate) : 0,
+            bitrate: isFinite(bitrate) ? bitrate : 0,
+            audio: audio
+        };
+    }
+
+    function engineMediaInfo(s) {
+        if (!s || !s.engine || typeof s.engine.mediaInfo !== 'function') return null;
+
+        try {
+            return s.engine.mediaInfo();
+        } catch (e) {
+            return null;
+        }
+    }
+
+    function buildVideoFormat(s) {
+        var meta = s && s.mediaMeta ? s.mediaMeta : {};
+        var info = engineMediaInfo(s);
+        var size = s && s.engine ? s.engine.videoSize() : null;
+
+        var container = meta.container || (info && info.container) || '';
+        var codec = meta.codec || (info && info.codec) || '';
+        var width = (size && size.width) || meta.width || (info && info.width) || 0;
+        var height = (size && size.height) || meta.height || (info && info.height) || 0;
+        var fps = meta.fps || (info && info.fps) || 0;
+
+        if (!container && !codec && !width && !height && !fps) return 'Недоступно';
+
+        return [
+            container || 'Н/Д',
+            codec || 'Н/Д',
+            (width > 0 && height > 0) ? (width + '×' + height) : 'Н/Д',
+            formatFrameRate(fps) || 'Н/Д'
+        ].join(' | ');
+    }
+
+    function collectAudioLines(s) {
+        var list = null;
+
+        if (s && s.engine) {
+            try {
+                list = s.engine.audioTracks();
+            } catch (e) {
+                list = null;
+            }
+        }
+
+        var tracks = (list && list.length) ? list : (s && s.mediaMeta && s.mediaMeta.audio ? s.mediaMeta.audio : []);
+
+        if (!tracks || !tracks.length) return 'Н/Д';
+
+        return tracks.map(function (track, i) {
+            var title = track.title || track.label || track.language || 'Н/Д';
+            var codec = audioCodecLabel(track.codec) || 'Н/Д';
+            var channels = audioChannelsLabel(track.channels) || 'Н/Д';
+            var sampleRate = audioSampleRateLabel(track.sampleRate) || 'Н/Д';
+            var active = track.enabled ? ' [активна]' : '';
+
+            return (i + 1) + '. ' + title + ' | ' + codec + ' | ' + channels + ' | ' + sampleRate + active;
+        }).join('\n');
+    }
+
+    /* =====================================================================
      * 7. Session: життєвий цикл сесії
      * ===================================================================== */
 
@@ -1766,7 +2358,11 @@
                 lastError: null,
                 fallbackUsed: false,
                 hooks: null,
-                speedMeter: createSpeedMeter()
+                speedMeter: createSpeedMeter(),
+                downloadMeter: createDownloadMeter(url),
+                mediaMeta: extractFfprobeMeta(data),
+                audioInfo: '',
+                audioInfoDirty: true
             };
 
             var s = session;
@@ -1780,8 +2376,8 @@
 
                 if (s.debug) {
                     s.debug.setSource(detectSource(data, url));
-                    s.debug.setState('INITIALIZING');
-                    s.debug.event('Player initialized');
+                    s.debug.setState(DEBUG_STATE_LABELS.INITIALIZING);
+                    s.debug.event('Плеєр ініціалізовано');
                 }
             }
 
@@ -1802,7 +2398,7 @@
                 onRate: function (rate) { if (s.ui) s.ui.setActiveRate(rate); },
                 onAutoplayBlocked: function () {
                     if (s.ui) s.ui.setBigPlay(true);
-                    dbg(s, 'event', 'Autoplay blocked by browser');
+                    dbg(s, 'event', 'Автовідтворення заблоковано браузером');
                 }
             };
 
@@ -1813,7 +2409,7 @@
             // Відео має бути ПІД шаром керування: монтуємо перед першим елементом UI.
             s.engine.mount(s.ui.root, s.ui.root.firstChild);
 
-            dbg(s, 'setEngine', s.engine.name || 'N/A');
+            dbg(s, 'setEngine', s.engine.name || 'Н/Д');
 
             bindControls(s);
             bindRemote(s);
@@ -1824,9 +2420,9 @@
             s.ui.setPlayState(true);
             s.ui.show();
 
-            dbg(s, 'event', 'Stream URL received');
-            dbg(s, 'setState', 'LOADING');
-            dbg(s, 'event', 'Video loading started');
+            dbg(s, 'event', 'Отримано URL потоку');
+            dbg(s, 'setState', DEBUG_STATE_LABELS.LOADING);
+            dbg(s, 'event', 'Початок завантаження відео');
 
             log('open session', url);
             s.engine.load(url);
@@ -1928,7 +2524,7 @@
         if (!s || s.debugState === state) return;
 
         s.debugState = state;
-        dbg(s, 'setState', state);
+        dbg(s, 'setState', DEBUG_STATE_LABELS[state] || state);
     }
 
     /**
@@ -1945,20 +2541,28 @@
             var size = s.engine.videoSize();
             var bufferedEnd = s.engine.buffered();
 
-            s.debug.set('time', isFinite(time) ? formatTime(time) : 'N/A');
-            s.debug.set('duration', (isFinite(duration) && duration > 0) ? formatTime(duration) : 'N/A');
-            s.debug.set('resolution', (size && size.width > 0 && size.height > 0) ? (size.width + '×' + size.height) : 'N/A');
+            s.debug.set('time', isFinite(time) ? formatTime(time) : 'Н/Д');
+            s.debug.set('duration', (isFinite(duration) && duration > 0) ? formatTime(duration) : 'Н/Д');
+            s.debug.set('resolution', (size && size.width > 0 && size.height > 0) ? (size.width + '×' + size.height) : 'Н/Д');
 
             var ahead = 0;
             if (isFinite(bufferedEnd) && bufferedEnd > 0) ahead = Math.max(0, bufferedEnd - time);
 
-            if (ahead > 0) s.debug.set('buffer', ahead.toFixed(1) + ' s');
-            else s.debug.set('buffer', bufferedEnd > 0 ? '0.0 s' : 'N/A');
+            if (ahead > 0) s.debug.set('buffer', ahead.toFixed(1) + ' с');
+            else s.debug.set('buffer', bufferedEnd > 0 ? '0.0 с' : 'Н/Д');
 
-            // Швидкість — лише оцінка наповнення буфера (секунди відео / секунду часу).
-            var rate = null;
-            if (!s.engine.paused() && bufferedEnd > 0) rate = s.speedMeter.sample(bufferedEnd);
-            s.debug.set('speed', rate ? '≈' + rate.toFixed(2) + '× (ESTIMATED)' : 'N/A');
+            var bitrate = (s.mediaMeta && s.mediaMeta.bitrate) ? s.mediaMeta.bitrate : 0;
+            var download = s.downloadMeter ? s.downloadMeter.sample(bufferedEnd, bitrate) : { mode: 'unavailable' };
+
+            s.debug.set('download', formatDownload(download));
+            s.debug.set('video-format', buildVideoFormat(s));
+
+            if (!s.audioInfo || s.audioInfoDirty) {
+                s.audioInfo = collectAudioLines(s);
+                s.audioInfoDirty = false;
+            }
+
+            s.debug.set('audio-tracks', s.audioInfo || 'Н/Д');
         } catch (e) {
             warn('debug refresh failed:', e && e.message ? e.message : e);
         }
@@ -1977,8 +2581,11 @@
 
         if (!s.metaLogged) {
             s.metaLogged = true;
-            dbg(s, 'event', 'Metadata loaded');
+            dbg(s, 'event', 'Метадані завантажено');
         }
+
+        if (s.ui.isAudioOpen()) refreshAudioPanel(s);
+        s.audioInfoDirty = true;
 
         refreshDebug(s);
     }
@@ -2008,11 +2615,11 @@
                 s.buffering = true;
                 s.speedMeter.reset();
                 setDebugState(s, 'BUFFERING');
-                dbg(s, 'event', 'Buffering started');
+                dbg(s, 'event', 'Буферизація почалася');
             }
         } else if (s.buffering) {
             s.buffering = false;
-            dbg(s, 'event', 'Buffering ended');
+            dbg(s, 'event', 'Буферизація завершилася');
 
             if (s.engine && !s.engine.paused()) setDebugState(s, 'PLAYING');
         }
@@ -2032,8 +2639,11 @@
 
         if (!s.startedLogged) {
             s.startedLogged = true;
-            dbg(s, 'event', 'Playback started');
+            dbg(s, 'event', 'Відтворення почалося');
         }
+
+        if (s.ui.isAudioOpen()) refreshAudioPanel(s);
+        s.audioInfoDirty = true;
 
         refreshDebug(s);
     }
@@ -2056,7 +2666,7 @@
 
             if (!s.pausedLogged) {
                 s.pausedLogged = true;
-                dbg(s, 'event', 'Playback paused');
+                dbg(s, 'event', 'Відтворення призупинено');
             }
         }
 
@@ -2067,7 +2677,7 @@
         s.ended = true;
 
         setDebugState(s, 'STOPPED');
-        dbg(s, 'event', 'Playback ended');
+        dbg(s, 'event', 'Відтворення завершено');
 
         if (!s.ui) return;
 
@@ -2114,7 +2724,7 @@
 
         s.fallbackUsed = true;
 
-        dbg(s, 'event', 'AVPlay failed → HTML5 fallback');
+        dbg(s, 'event', 'Помилка AVPlay → перехід на HTML5');
         dbg(s, 'setError', 0);
 
         var previous = s.engine;
@@ -2128,7 +2738,7 @@
 
             dbg(s, 'setEngine', s.engine.name);
             setDebugState(s, 'LOADING');
-            dbg(s, 'event', 'Fallback engine: ' + s.engine.name);
+            dbg(s, 'event', 'Резервний рушій: ' + s.engine.name);
 
             s.engine.load(s.url);
 
@@ -2178,7 +2788,7 @@
 
         setDebugState(s, 'ERROR');
         dbg(s, 'setError', code, message.title);
-        dbg(s, 'event', 'Playback error: ' + code + ' (' + message.title + ')');
+        dbg(s, 'event', 'Помилка відтворення: ' + code + ' (' + message.title + ')');
         refreshDebug(s);
     }
 
@@ -2191,7 +2801,7 @@
         var root = ui.root;
 
         function onClick(event) {
-            var target = event.target.closest('button[data-act], button[data-rate]');
+            var target = event.target.closest('button[data-act], button[data-rate], button[data-audio-index]');
             if (!target) return;
 
             event.preventDefault();
@@ -2199,6 +2809,12 @@
 
             var act = target.getAttribute('data-act');
             var rate = target.getAttribute('data-rate');
+            var audioIndex = target.getAttribute('data-audio-index');
+
+            if (audioIndex !== null) {
+                selectAudioTrack(s, audioIndex);
+                return;
+            }
 
             if (rate) {
                 s.engine.setRate(parseFloat(rate));
@@ -2210,6 +2826,15 @@
             else if (act === 'back') s.engine.seekBy(-CONFIG.seekStep);
             else if (act === 'fwd') s.engine.seekBy(CONFIG.seekStep);
             else if (act === 'settings') ui.toggleSettings();
+            else if (act === 'audio') {
+                if (ui.isAudioOpen()) {
+                    ui.closeAudio();
+                } else {
+                    refreshAudioPanel(s);
+                    ui.openAudio();
+                    ui.focusAudio(ui.selectedAudioIndex() !== null ? ui.selectedAudioIndex() : 0);
+                }
+            }
             else if (act === 'close') Session.close('button');
             else if (act === 'retry') retry(s);
         }
@@ -2219,9 +2844,14 @@
 
         // Клік по відео (поза панеллю) — play/pause, як у VLC.
         function onRootClick(event) {
-            if (event.target.closest('.vlc-bottom, .vlc-settings, .vlc-error, .vlc-bigplay, .vlc-top')) return;
+            if (event.target.closest('.vlc-bottom, .vlc-settings, .vlc-audio, .vlc-error, .vlc-bigplay, .vlc-top')) return;
 
-            // Клік поза відкритими налаштуваннями лише закриває їх.
+            // Клік поза відкритими панелями лише закриває їх.
+            if (ui.isAudioOpen()) {
+                ui.closeAudio();
+                return;
+            }
+
             if (ui.isSettingsOpen()) {
                 ui.closeSettings();
                 return;
@@ -2241,11 +2871,16 @@
             s.engine.play();
         });
 
-        // Закриття налаштувань кліком поза ними
+        // Закриття панелей кліком поза ними
         function onDocClick(event) {
-            if (!ui.isSettingsOpen()) return;
-            if (event.target.closest('.vlc-settings, [data-act="settings"]')) return;
-            ui.closeSettings();
+            if (ui.isAudioOpen() && !event.target.closest('.vlc-audio, [data-act="audio"]')) {
+                ui.closeAudio();
+                return;
+            }
+
+            if (ui.isSettingsOpen() && !event.target.closest('.vlc-settings, [data-act="settings"]')) {
+                ui.closeSettings();
+            }
         }
 
         document.addEventListener('click', onDocClick, true);
@@ -2269,7 +2904,178 @@
 
         setDebugState(s, 'LOADING');
         dbg(s, 'setError', 0);
-        dbg(s, 'event', 'Reconnect attempt');
+        dbg(s, 'event', 'Повторне підключення');
+    }
+
+    /* =====================================================================
+     * 9.1. Аудіодоріжки: отримання, відображення, перемикання
+     * ---------------------------------------------------------------------
+     * Дані беремо лише з рушія. Якщо рушій не надає API або метаданих —
+     * показуємо «Н/Д» / пояснення, а не вигадані мову, кодек чи канали.
+     * ===================================================================== */
+
+    function audioCodecLabel(value) {
+        var raw = String(value || '').trim();
+        if (!raw) return '';
+
+        var key = raw.toUpperCase().replace(/[^A-Z0-9]/g, '');
+        var known = {
+            AC3: 'AC-3',
+            EAC3: 'E-AC-3',
+            AAC: 'AAC',
+            AACL: 'AAC',
+            DTS: 'DTS',
+            TRUEHD: 'TrueHD',
+            FLAC: 'FLAC',
+            OPUS: 'OPUS',
+            MP3: 'MP3'
+        };
+
+        return known[key] || raw;
+    }
+
+    function audioChannelsLabel(value) {
+        var text = String(value === undefined || value === null ? '' : value).trim();
+        if (/^\d+\.\d+$/.test(text)) return text;
+
+        var count = parseInt(value, 10);
+        if (!isFinite(count) || count <= 0) return '';
+
+        if (count === 1) return '1.0';
+        if (count === 2) return '2.0';
+        if (count === 6) return '5.1';
+        if (count === 8) return '7.1';
+
+        return count + ' кан.';
+    }
+
+    function audioSampleRateLabel(value) {
+        var rate = parseInt(value, 10);
+        if (!isFinite(rate) || rate <= 0) return '';
+
+        return rate + ' Гц';
+    }
+
+    function audioTrackView(track, position) {
+        var index = (track && track.index !== undefined) ? track.index : position;
+        var language = (track && track.language) ? String(track.language) : '';
+        var title = (track && (track.title || track.label)) ? String(track.title || track.label) : '';
+
+        return {
+            index: index,
+            number: position + 1,
+            title: title,
+            language: language,
+            codec: audioCodecLabel(track && track.codec),
+            channels: audioChannelsLabel(track && track.channels),
+            sampleRate: audioSampleRateLabel(track && track.sampleRate),
+            enabled: !!(track && track.enabled)
+        };
+    }
+
+    function refreshAudioPanel(s) {
+        if (!s || !s.engine || !s.ui) return;
+
+        var list = null;
+
+        try {
+            list = s.engine.audioTracks();
+        } catch (e) {
+            list = null;
+        }
+
+        if (list === null) {
+            s.ui.clearAudio();
+            s.ui.setAudioStatus('Цей рушій не надає список аудіодоріжок. Якщо звук відсутній, браузер може не підтримувати аудіокодек (наприклад, AC-3/E-AC-3/DTS).', true);
+            return;
+        }
+
+        var views = [];
+
+        for (var i = 0; i < list.length; i++) {
+            views.push(audioTrackView(list[i], i));
+        }
+
+        s.ui.renderAudio(views);
+
+        var active = null;
+
+        for (var j = 0; j < views.length; j++) {
+            if (views[j].enabled) {
+                active = views[j].index;
+                break;
+            }
+        }
+
+        if (active !== null) {
+            s.ui.setAudioActive(active);
+        } else if (views.length) {
+            s.ui.setAudioStatus('Поточна аудіодоріжка не визначена.', false);
+        }
+    }
+
+    function selectAudioTrack(s, index) {
+        if (!s || !s.engine || !s.ui) return false;
+
+        var list = null;
+
+        try {
+            list = s.engine.audioTracks();
+        } catch (e) {
+            list = null;
+        }
+
+        if (!list || !list.length) {
+            s.ui.setAudioStatus('Не вдалося отримати список аудіодоріжок.', true);
+            return false;
+        }
+
+        var selected = null;
+
+        for (var i = 0; i < list.length; i++) {
+            var trackIndex = (list[i] && list[i].index !== undefined) ? list[i].index : i;
+            if (String(trackIndex) === String(index)) {
+                selected = list[i];
+                break;
+            }
+        }
+
+        if (!selected) {
+            s.ui.setAudioStatus('Аудіодоріжку не знайдено.', true);
+            return false;
+        }
+
+        var before = s.engine.time();
+        var ok = false;
+
+        try {
+            ok = s.engine.selectAudio(selected.index) === true;
+        } catch (e) {
+            ok = false;
+        }
+
+        if (!ok) {
+            s.ui.setAudioStatus('Не вдалося перемкнути аудіодоріжку. Рушій не підтримує цю дію.', true);
+            dbg(s, 'event', 'Не вдалося перемкнути аудіодоріжку');
+            return false;
+        }
+
+        // Перемикання не повинно втрачати позицію. Якщо рушій її змінив —
+        // повертаємо назад без перезапуску відео.
+        var after = s.engine.time();
+        if (isFinite(before) && isFinite(after) && Math.abs(after - before) > 1.5) {
+            safe(function () { s.engine.seek(before); });
+        }
+
+        var view = audioTrackView(selected, i);
+        s.ui.setAudioActive(selected.index);
+        s.audioInfoDirty = true;
+
+        var name = view.title || view.language || ('Доріжка ' + view.number);
+        s.ui.setAudioStatus('Аудіодоріжку змінено: ' + name, false);
+        dbg(s, 'event', 'Аудіодоріжка: ' + name);
+
+        return true;
     }
 
     /* =====================================================================
@@ -2284,6 +3090,45 @@
             if (event.ctrlKey || event.metaKey || event.altKey) return;
 
             var code = event.keyCode || event.which;
+
+            // Відкрита панель аудіодоріжок перехоплює навігацію.
+            if (s.ui.isAudioOpen()) {
+                if (code === 27) {            // Escape
+                    event.preventDefault();
+                    event.stopPropagation();
+                    s.ui.closeAudio();
+                    return;
+                }
+
+                if (code === 38 || code === 40) { // ArrowUp / ArrowDown
+                    event.preventDefault();
+                    event.stopPropagation();
+                    s.ui.moveAudioFocus(code === 38 ? -1 : 1);
+                    s.ui.show();
+                    return;
+                }
+
+                if (code === 13 || code === 32) { // Enter / Space
+                    event.preventDefault();
+                    event.stopPropagation();
+
+                    var audioActive = document.activeElement;
+                    if (audioActive && audioActive.getAttribute && audioActive.getAttribute('data-audio-index') !== null) {
+                        audioActive.click();
+                    } else {
+                        s.ui.focusAudio(s.ui.selectedAudioIndex() !== null ? s.ui.selectedAudioIndex() : 0);
+                    }
+
+                    s.ui.show();
+                    return;
+                }
+
+                if (code === 37 || code === 39) { // не перемотувати під час вибору
+                    event.preventDefault();
+                    event.stopPropagation();
+                    return;
+                }
+            }
 
             if (code === 32) {            // Space
                 event.preventDefault();
@@ -2726,6 +3571,20 @@
             TizenAvplayEngine: TizenAvplayEngine,
             isAvplayAvailable: isAvplayAvailable,
             fallbackToHtml5: fallbackToHtml5,
+            refreshAudioPanel: refreshAudioPanel,
+            selectAudioTrack: selectAudioTrack,
+            audioTrackView: audioTrackView,
+            extractFfprobeMeta: extractFfprobeMeta,
+            buildVideoFormat: buildVideoFormat,
+            collectAudioLines: collectAudioLines,
+            createDownloadMeter: createDownloadMeter,
+            formatDownload: formatDownload,
+            formatBytesPerSecond: formatBytesPerSecond,
+            parseFrameRate: parseFrameRate,
+            videoCodecName: videoCodecName,
+            containerName: containerName,
+            DEBUG_STATE_LABELS: DEBUG_STATE_LABELS,
+            DEBUG_SOURCE_LABELS: DEBUG_SOURCE_LABELS,
             AVPLAY_REQUIRED: AVPLAY_REQUIRED,
             AVPLAY_TRACK_METHODS: AVPLAY_TRACK_METHODS,
             ENGINE_CONTRACT: ENGINE_CONTRACT

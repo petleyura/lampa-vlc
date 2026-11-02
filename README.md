@@ -2,7 +2,7 @@
 
 Незалежний повноекранний плеєр для медіапорталу **Lampa** у стилі VLC. Плагін перехоплює запуск відео, скасовує штатний плеєр Lampa та відкриває власний інтерфейс.
 
-> **Поточна версія: v0.5.0.** У меню Lampa плеєр зараз називається **VLC Player**. Перейменування на **Кастомний плеєр** заплановане в окремому оновленні; у поточній версії пункту «Кастомний плеєр» ще немає.
+> **Поточна версія: v0.6.0.** У меню Lampa плеєр зараз називається **VLC Player**. Перейменування на **Кастомний плеєр** заплановане в окремому оновленні; у поточній версії пункту «Кастомний плеєр» ще немає.
 
 ---
 
@@ -32,7 +32,7 @@
 
 - **Плеєр** — виберіть **VLC Player** для звичайного відео.
 - **Плеєр для торентів** — виберіть **VLC Player** для потоків TorrServer.
-- **Плеєр для IPTV** — пункт є, але перехоплення IPTV у v0.5.0 **не реалізовано**.
+- **Плеєр для IPTV** — пункт є, але перехоплення IPTV у v0.6.0 **не реалізовано**.
 
 Якщо вибрано інший плеєр, плагін не втручається у відтворення.
 
@@ -45,8 +45,17 @@
 - HTML5-рушій для ПК/Android/webOS;
 - Tizen AVPlay, якщо доступний `webapis.avplay`;
 - автоматичний fallback AVPlay → HTML5;
-- Debug Panel;
+- вибір аудіодоріжки, якщо рушій надає список доріжок;
+- українська Debug Panel;
 - збереження прогресу через Timeline Lampa.
+
+### Діагностика
+
+Debug Panel показує:
+
+- **ШВИДКІСТЬ ЗАВАНТАЖЕННЯ** — фактичні `transferSize` з Resource Timing, якщо браузер їх надає; інакше явно позначена оцінка за приростом буфера. Додаткових мережевих запитів для цього немає.
+- **ФОРМАТ ВІДЕО** — контейнер, відеокодек, роздільність і FPS лише з фактичних метаданих (`data.ffprobe`, AVPlay або іншого API); якщо даних немає — `Н/Д`/`Недоступно`. Кодек не визначається за розширенням URL.
+- **АУДІОДОРІЖКИ** — номер, назва/мова, кодек, канали, частота та активна доріжка з метаданих рушія.
 
 ### Формати відео
 
@@ -82,7 +91,13 @@
 | E-AC-3 | у Chromium **немає**; Tizen AVPlay — так; webOS — за моделлю |
 | DTS/DTS-HD/TrueHD | у HTML5 **немає**; на TV — за моделлю; переважно не підтримується |
 
-**Вибір аудіодоріжок у UI відсутній.** `Html5Engine.audioTracks()` у Chromium зазвичай повертає `null`; Tizen AVPlay має технічну можливість вибору, але кнопок у панелі ще немає.
+**Вибір аудіодоріжок** доступний через кнопку **«Аудіодоріжка»**, якщо рушій надає список:
+
+- **Tizen AVPlay** — реальне перемикання через `setSelectTrack`;
+- **HTML5** — лише якщо браузер реалізує `HTMLMediaElement.audioTracks` (у Chromium зазвичай **ні**);
+- якщо списку немає — плеєр показує пояснення, а не порожнє меню.
+
+Плагін не вигадує мову, кодек чи кількість каналів: показуються лише дані рушія, інакше `Н/Д`.
 
 ### Субтитри
 
@@ -104,7 +119,8 @@
 
 ### Відомі обмеження
 
-- немає UI вибору аудіодоріжок і субтитрів;
+- немає UI вибору субтитрів;
+- вибір аудіодоріжок залежить від рушія (у Chromium HTML5 API зазвичай відсутній);
 - IPTV-пункт є, але IPTV не перехоплюється;
 - HLS/DASH не підтримуються;
 - MKV/HEVC/AC-3/DTS залежать від браузера або моделі TV;
@@ -116,7 +132,7 @@
 
 ### Версія та ліцензія
 
-- Версія: **v0.5.0** (2026-11-01).
+- Версія: **v0.6.0** (2026-11-02).
 - Історія змін: [CHANGELOG.md](CHANGELOG.md).
 - Ліцензія: [MIT](LICENSE).
 
@@ -128,7 +144,7 @@
 
 A standalone full-screen player for the **Lampa** media portal with a VLC-style interface. The plugin intercepts playback, aborts Lampa's stock player, and opens its own UI.
 
-> **Current version: v0.5.0.** The Lampa menu item is currently named **VLC Player**. The planned rename to **Кастомний плеєр** (Custom Player) is not available in this version yet.
+> **Current version: v0.6.0.** The Lampa menu item is currently named **VLC Player**. The planned rename to **Кастомний плеєр** (Custom Player) is not available in this version yet.
 
 ### Installation
 
@@ -150,7 +166,7 @@ Open **Settings → Player**:
 
 - **Player** — select **VLC Player** for regular video.
 - **Player for torrents** — select **VLC Player** for TorrServer streams.
-- **Player for IPTV** — the option exists, but IPTV interception is **not implemented** in v0.5.0.
+- **Player for IPTV** — the option exists, but IPTV interception is **not implemented** in v0.6.0.
 
 If another player is selected, the plugin does not interfere with playback.
 
@@ -163,8 +179,17 @@ If another player is selected, the plugin does not interfere with playback.
 - HTML5 engine for desktop/Android/webOS;
 - Tizen AVPlay when `webapis.avplay` is available;
 - automatic AVPlay → HTML5 fallback;
-- Debug Panel;
+- audio-track selection when the engine exposes a track list;
+- Ukrainian Debug Panel;
 - progress saving through Lampa Timeline.
+
+### Diagnostics
+
+The Debug Panel shows:
+
+- **Download speed** — actual `transferSize` from Resource Timing when exposed; otherwise an explicitly marked estimate based on buffer growth. No extra network requests are made.
+- **Video format** — container, video codec, resolution, and FPS only from actual metadata (`data.ffprobe`, AVPlay, or another API); otherwise `N/A`/`Unavailable`. The codec is not inferred from the URL extension.
+- **Audio tracks** — number, title/language, codec, channels, sample rate, and the active track from engine metadata.
 
 ### Video containers
 
@@ -200,7 +225,13 @@ The plugin **does not bundle decoders**. Support depends on the browser's HTML5 
 | E-AC-3 | **not in Chromium**; Tizen AVPlay — yes; webOS — model dependent |
 | DTS/DTS-HD/TrueHD | **not in HTML5**; TV model dependent; mostly unsupported |
 
-**There is no audio-track selection UI.** `Html5Engine.audioTracks()` usually returns `null` in Chromium; Tizen AVPlay has the technical capability, but no panel controls yet.
+**Audio-track selection** is available through the **Audio track** button when the engine exposes a list:
+
+- **Tizen AVPlay** — real switching via `setSelectTrack`;
+- **HTML5** — only when the browser implements `HTMLMediaElement.audioTracks` (usually **not** in Chromium);
+- if no list is available, the player shows an explanation instead of an empty menu.
+
+The plugin never invents language, codec, or channel data: only engine metadata is shown; otherwise `Н/Д` (N/A).
 
 ### Subtitles
 
@@ -222,7 +253,8 @@ The plugin does not include native libraries and does not launch external player
 
 ### Known limitations
 
-- no audio/subtitle selection UI;
+- no subtitle selection UI;
+- audio-track selection depends on the engine (HTML5 API is usually absent in Chromium);
 - IPTV option exists but IPTV is not intercepted;
 - no HLS/DASH support;
 - MKV/HEVC/AC-3/DTS depend on the browser or TV model;
@@ -234,6 +266,6 @@ The plugin does not include native libraries and does not launch external player
 
 ### Version and license
 
-- Version: **v0.5.0** (2026-11-01).
+- Version: **v0.6.0** (2026-11-02).
 - Changelog: [CHANGELOG.md](CHANGELOG.md).
 - License: [MIT](LICENSE).

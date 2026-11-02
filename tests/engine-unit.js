@@ -267,6 +267,159 @@ check('audioTracks() повертає реальні доріжки', Array.isAr
 check('selectAudio(1) перемикає доріжку', engine.selectAudio(1) === true && engine.el.audioTracks[1].enabled === true);
 check('selectAudio(1) вимикає інші', engine.el.audioTracks[0].enabled === false);
 check('selectAudio(5) повертає false', engine.selectAudio(5) === false);
+check('selectAudio не змінює позицію відео', engine.el.currentTime === 12, engine.el.currentTime);
+
+engine.el.currentTime = 42;
+check('selectAudio(0) зберігає позицію', engine.selectAudio(0) === true && engine.el.currentTime === 42);
+
+check('audioTracks() з порожнім API → []', (function () {
+    engine.el.audioTracks = [];
+    var empty = engine.audioTracks();
+    return Array.isArray(empty) && empty.length === 0;
+})());
+
+engine.el.audioTracks = [
+    { label: 'Українська', language: 'uk', enabled: true },
+    { label: 'English', language: 'en', enabled: false }
+];
+var audioView = engine.audioTracks()[0];
+check('audioTracks() повертає номер/мову/назву', audioView.index === 0 && audioView.language === 'uk' && audioView.title === 'Українська', JSON.stringify(audioView));
+
+check('audioTracks() при помилці API → null', (function () {
+    var saved = engine.el.audioTracks;
+    Object.defineProperty(engine.el, 'audioTracks', {
+        configurable: true,
+        get: function () { throw new Error('boom'); }
+    });
+    var broken = engine.audioTracks();
+    Object.defineProperty(engine.el, 'audioTracks', { configurable: true, value: saved });
+    return broken === null;
+})());
+
+var view = internals.audioTrackView({
+    index: 1,
+    label: 'English',
+    language: 'en',
+    codec: 'AC3',
+    channels: 6,
+    sampleRate: 48000,
+    enabled: true
+}, 0);
+check('audioTrackView: кодек/канали/частота', view.codec === 'AC-3' && view.channels === '5.1' && view.sampleRate === '48000 Гц',
+    JSON.stringify(view));
+check('audioTrackView: номер і активність', view.number === 1 && view.enabled === true);
+
+function fakeAudioSession(selectResult) {
+    var state = { active: null, status: '', error: false, seeks: 0 };
+
+    return {
+        state: state,
+        session: {
+            engine: {
+                audioTracks: function () {
+                    return [
+                        { index: 0, label: 'Українська', language: 'uk', enabled: true },
+                        { index: 1, label: 'English', language: 'en', enabled: false }
+                    ];
+                },
+                selectAudio: function () { return selectResult; },
+                time: function () { return 10; },
+                seek: function () { state.seeks++; }
+            },
+            ui: {
+                clearAudio: function () {},
+                renderAudio: function () {},
+                setAudioStatus: function (text, error) { state.status = text; state.error = !!error; },
+                setAudioActive: function (index) { state.active = index; }
+            }
+        }
+    };
+}
+
+var audioOk = fakeAudioSession(true);
+check('selectAudioTrack: успішне перемикання', internals.selectAudioTrack(audioOk.session, 1) === true &&
+    audioOk.state.active === 1 && audioOk.state.error === false, JSON.stringify(audioOk.state));
+
+var audioFail = fakeAudioSession(false);
+check('selectAudioTrack: помилка рушія', internals.selectAudioTrack(audioFail.session, 1) === false &&
+    audioFail.state.error === true && audioFail.state.status.indexOf('Не вдалося') > -1);
+
+/* ---------- Метадані та швидкість завантаження ---------- */
+
+var ffprobe = internals.extractFfprobeMeta({
+    ffprobe: {
+        format: { format_name: 'matroska,webm', bit_rate: '8000000' },
+        streams: [
+            { codec_type: 'video', codec_name: 'hevc', width: 1920, height: 1080, r_frame_rate: '24000/1001' },
+            { codec_type: 'audio', index: 1, codec_name: 'eac3', channels: 6, sample_rate: '48000', tags: { language: 'en', title: 'English' }, disposition: { default: 1 } }
+        ]
+    }
+});
+check('ffprobe: контейнер MKV', ffprobe.container === 'MKV', ffprobe.container);
+check('ffprobe: відеокодек HEVC', ffprobe.codec === 'HEVC', ffprobe.codec);
+check('ffprobe: FPS 23.976', Math.abs(ffprobe.fps - 23.976) < 0.001, ffprobe.fps);
+check('ffprobe: аудіокодек E-AC-3/5.1/48000', ffprobe.audio[0].codec === 'E-AC-3' &&
+    ffprobe.audio[0].channels === 6 && ffprobe.audio[0].sampleRate === '48000');
+
+check('ffprobe відсутній → null', internals.extractFfprobeMeta({}) === null);
+check('formatBytesPerSecond: КБ/с', internals.formatBytesPerSecond(500 * 1024) === '500 КБ/с');
+check('formatBytesPerSecond: МБ/с з комою', internals.formatBytesPerSecond(2.5 * 1024 * 1024) === '2,5 МБ/с');
+check('formatDownload: фактична швидкість', internals.formatDownload({ mode: 'actual', speed: 1024 }) === '1,0 КБ/с');
+check('formatDownload: оцінка за буфером', internals.formatDownload({ mode: 'buffer', speed: null, bufferRate: 1.5 }).indexOf('ОЦІНКА') > -1);
+check('formatDownload: немає даних', internals.formatDownload({ mode: 'unavailable' }) === 'Н/Д');
+
+/* Перевірка фактичного лічильника transferSize з підміненим performance/Date. */
+var savedPerformance = global.window.performance;
+var savedNow = Date.now;
+var fakeBytes = 1000;
+var fakeNow = 100000;
+
+global.window.performance = {
+    getEntriesByName: function () { return [{ transferSize: fakeBytes }]; }
+};
+Date.now = function () { return fakeNow; };
+
+var transferMeter = internals.createDownloadMeter('http://example.test/media');
+transferMeter.sample(0, 0);
+fakeBytes = 3000;
+fakeNow += 1000;
+var transferSample = transferMeter.sample(0, 0);
+check('downloadMeter: фактичні transferSize', transferSample.mode === 'actual' && transferSample.speed === 2000,
+    JSON.stringify(transferSample));
+
+var savedBufferPerformance = global.window.performance;
+global.window.performance = {
+    getEntriesByName: function () { return []; }
+};
+fakeNow += 1000;
+var bufferMeter = internals.createDownloadMeter('http://example.test/media2');
+bufferMeter.sample(10, 8000000);
+fakeNow += 1000;
+var bufferSample = bufferMeter.sample(12, 8000000);
+check('downloadMeter: оцінка за буфером + бітрейт', bufferSample.mode === 'buffer' &&
+    Math.round(bufferSample.bufferRate) === 2 && Math.round(bufferSample.speed) === 2000000,
+    JSON.stringify(bufferSample));
+
+Date.now = savedNow;
+global.window.performance = savedPerformance;
+
+var formatSession = {
+    mediaMeta: ffprobe,
+    engine: {
+        videoSize: function () { return { width: 1920, height: 1080 }; }
+    }
+};
+check('buildVideoFormat: контейнер/кодек/FPS', internals.buildVideoFormat(formatSession).indexOf('MKV | HEVC | 1920×1080 | 23.976 FPS') > -1,
+    internals.buildVideoFormat(formatSession));
+
+var audioLines = internals.collectAudioLines({
+    engine: {
+        audioTracks: function () {
+            return [{ index: 0, title: 'English', codec: 'eac3', channels: 6, sampleRate: 48000, enabled: true }];
+        }
+    }
+});
+check('collectAudioLines: номер/назва/кодек/канали/активна', audioLines.indexOf('1. English | E-AC-3 | 5.1 | 48000 Гц [активна]') === 0, audioLines);
 
 check('subtitleTracks() без доріжок → []', Array.isArray(engine.subtitleTracks()) && engine.subtitleTracks().length === 0);
 
