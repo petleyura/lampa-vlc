@@ -64,6 +64,8 @@ check('Кнопки play/back/fwd/audio/settings/close',
         .every(s => src.indexOf(s) > -1));
 check('Прогрес-бар з буфером і повзунком', /vlc-buffer/.test(src) && /vlc-thumb/.test(src));
 check('Панель аудіодоріжок', /vlc-audio/.test(src) && /data-audio-list/.test(src) && /АУДІОДОРІЖКА/.test(src));
+check('Кнопка аудіо з видимим текстом', /data-act="audio"[\s\S]{0,220}АУДІО/.test(src));
+check('TorrServer /ffp для метаданих', /function probeTorrentMetadata/.test(src) && /\/ffp\//.test(src));
 check('Отримання та перемикання аудіодоріжок', /function refreshAudioPanel/.test(src) && /function selectAudioTrack/.test(src));
 
 /* ---------- 6. Клавіатура ---------- */

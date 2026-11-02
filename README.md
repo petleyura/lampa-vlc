@@ -19,7 +19,7 @@
 3. Вкажіть адресу плагіна:
 
    ```
-   https://cdn.jsdelivr.net/gh/petleyura/lampa-vlc@main/Lampa-VLC-Player.js
+   https://petleyura.github.io/lampa-vlc/Lampa-VLC-Player.js
    ```
 
 4. Підтвердіть додавання та перезавантажте Lampa (F5).
@@ -56,6 +56,7 @@ Debug Panel показує:
 - **ШВИДКІСТЬ ЗАВАНТАЖЕННЯ** — фактичні `transferSize` з Resource Timing, якщо браузер їх надає; інакше явно позначена оцінка за приростом буфера. Додаткових мережевих запитів для цього немає.
 - **ФОРМАТ ВІДЕО** — контейнер, відеокодек, роздільність і FPS лише з фактичних метаданих (`data.ffprobe`, AVPlay або іншого API); якщо даних немає — `Н/Д`/`Недоступно`. Кодек не визначається за розширенням URL.
 - **АУДІОДОРІЖКИ** — номер, назва/мова, кодек, канали, частота та активна доріжка з метаданих рушія.
+- Для торентів метадані додатково читаються з TorrServer `/ffp/{hash}/{id}`; якщо endpoint недоступний, показуються `Н/Д`.
 
 ### Формати відео
 
@@ -153,7 +154,7 @@ A standalone full-screen player for the **Lampa** media portal with a VLC-style 
 3. Enter the plugin URL:
 
    ```
-   https://cdn.jsdelivr.net/gh/petleyura/lampa-vlc@main/Lampa-VLC-Player.js
+   https://petleyura.github.io/lampa-vlc/Lampa-VLC-Player.js
    ```
 
 4. Confirm and reload Lampa (F5).
@@ -190,6 +191,7 @@ The Debug Panel shows:
 - **Download speed** — actual `transferSize` from Resource Timing when exposed; otherwise an explicitly marked estimate based on buffer growth. No extra network requests are made.
 - **Video format** — container, video codec, resolution, and FPS only from actual metadata (`data.ffprobe`, AVPlay, or another API); otherwise `N/A`/`Unavailable`. The codec is not inferred from the URL extension.
 - **Audio tracks** — number, title/language, codec, channels, sample rate, and the active track from engine metadata.
+- For torrents, metadata is also read from TorrServer `/ffp/{hash}/{id}`; if the endpoint is unavailable, `N/A` is shown.
 
 ### Video containers
 

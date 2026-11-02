@@ -247,6 +247,8 @@
         '.vlc-btn--primary{color:#FF8800}',
         '.vlc-btn--primary:hover{color:#FFA733;background:rgba(255,136,0,.14)}',
         '.vlc-btn--close:hover{color:#ff5252;background:rgba(255,82,82,.12)}',
+        '.vlc-btn--audio{width:auto;padding:0 9px;gap:6px}',
+        '.vlc-btn--audio .vlc-btn__text{font-size:10px;font-weight:700;letter-spacing:.7px;color:inherit}',
 
         '.vlc-time{display:flex;align-items:center;gap:6px;font-variant-numeric:tabular-nums;',
         'font-size:13px;color:#cfcfcf;letter-spacing:.3px;white-space:nowrap}',
@@ -285,6 +287,8 @@
         'font:inherit;pointer-events:auto}',
         '.vlc-audio__item:hover,.vlc-audio__item:focus{outline:none;border-color:rgba(255,136,0,.65);background:rgba(255,136,0,.10)}',
         '.vlc-audio__item.is-active{border-color:#FF8800;background:rgba(255,136,0,.14)}',
+        '.vlc-audio__item.is-disabled{opacity:.65;cursor:default}',
+        '.vlc-audio__item.is-disabled:hover{border-color:rgba(255,255,255,.12);background:transparent}',
         '.vlc-audio__num{flex:0 0 auto;min-width:18px;color:#FF8800;font-weight:700;font-variant-numeric:tabular-nums}',
         '.vlc-audio__body{min-width:0;display:flex;flex-direction:column;gap:2px}',
         '.vlc-audio__name{font-size:13px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}',
@@ -393,6 +397,15 @@
                 }
                 return url;
             }, url);
+        },
+
+        serverUrl: function () {
+            return safe(function () {
+                if (window.Lampa.Torserver && typeof window.Lampa.Torserver.url === 'function') {
+                    return window.Lampa.Torserver.url() || '';
+                }
+                return '';
+            }, '');
         },
 
         updateTimeline: function (view) {
@@ -1388,7 +1401,7 @@
                     '<div class="vlc-live"><i></i><span>LIVE</span></div>',
                     '<div class="vlc-spacer"></div>',
                     '<div class="vlc-group">',
-                        '<button type="button" class="vlc-btn" data-act="audio" aria-label="Аудіодоріжка">' + ICONS.audio + '</button>',
+                        '<button type="button" class="vlc-btn vlc-btn--audio" data-act="audio" aria-label="Аудіодоріжка">' + ICONS.audio + '<span class="vlc-btn__text">АУДІО</span></button>',
                         '<button type="button" class="vlc-btn" data-act="settings" aria-label="Налаштування">' + ICONS.gear + '</button>',
                         '<button type="button" class="vlc-btn vlc-btn--close" data-act="close" aria-label="Закрити">' + ICONS.close + '</button>',
                     '</div>',
@@ -1636,9 +1649,12 @@
             tracks.forEach(function (track) {
                 var item = document.createElement('button');
                 item.type = 'button';
-                item.className = 'vlc-audio__item' + (track.enabled ? ' is-active' : '');
+                item.className = 'vlc-audio__item' + (track.enabled ? ' is-active' : '') +
+                    (track.selectable === false ? ' is-disabled' : '');
                 item.setAttribute('data-audio-index', String(track.index));
                 item.setAttribute('aria-pressed', track.enabled ? 'true' : 'false');
+                item.setAttribute('aria-disabled', track.selectable === false ? 'true' : 'false');
+                if (track.selectable === false) item.disabled = true;
 
                 var num = document.createElement('span');
                 num.className = 'vlc-audio__num';
@@ -2271,6 +2287,63 @@
         }
     }
 
+    /**
+     * Метадані торент-потоку з TorrServer /ffp/{hash}/{id}.
+     * Використовує наявний HTTP-клієнт Lampa (Basic Auth додається ним).
+     * Не блокує відтворення; якщо endpoint недоступний — лише журнал.
+     */
+    function probeTorrentMetadata(s) {
+        if (!s || s.destroying || s.mediaMeta || s.probeStarted) return;
+        if (!s.data || !s.data.torrent_hash) return;
+
+        var id = s.data.id;
+        if (id === undefined || id === null) return;
+
+        var base = LampaApi.serverUrl();
+        if (!base) return;
+
+        var Reguest = window.Lampa && window.Lampa.Reguest;
+        if (typeof Reguest !== 'function') return;
+
+        s.probeStarted = true;
+
+        var url = base.replace(/\/+$/, '') + '/ffp/' +
+            encodeURIComponent(s.data.torrent_hash) + '/' + encodeURIComponent(id);
+        var net = new Reguest();
+        var finished = false;
+
+        function done() {
+            finished = true;
+        }
+
+        try {
+            net.timeout(5000);
+            net.silent(url, function (json) {
+                if (finished || s.destroying) return;
+
+                var meta = extractFfprobeMeta({ ffprobe: json });
+                if (!meta) return;
+
+                s.mediaMeta = meta;
+                s.audioInfoDirty = true;
+                dbg(s, 'event', 'Метадані TorrServer отримано');
+                refreshDebug(s);
+
+                if (s.ui && s.ui.isAudioOpen()) refreshAudioPanel(s);
+                done();
+            }, function (error) {
+                if (finished || s.destroying) return;
+
+                var status = error && error.status ? error.status : '?';
+                dbg(s, 'event', 'Метадані TorrServer недоступні (' + status + ')');
+                done();
+            }, null, { timeout: 5000, dataType: 'json' });
+        } catch (e) {
+            done();
+            dbg(s, 'event', 'Помилка запиту метаданих TorrServer');
+        }
+    }
+
     function buildVideoFormat(s) {
         var meta = s && s.mediaMeta ? s.mediaMeta : {};
         var info = engineMediaInfo(s);
@@ -2362,7 +2435,8 @@
                 downloadMeter: createDownloadMeter(url),
                 mediaMeta: extractFfprobeMeta(data),
                 audioInfo: '',
-                audioInfoDirty: true
+                audioInfoDirty: true,
+                probeStarted: false
             };
 
             var s = session;
@@ -2426,6 +2500,9 @@
 
             log('open session', url);
             s.engine.load(url);
+
+            // Метадані торента — асинхронно, не блокуючи старт відео.
+            safe(function () { probeTorrentMetadata(s); });
 
             // Оновлення панелі незалежно від подій рушія (таймкод/буфер).
             s.debugTimer = setInterval(function () {
@@ -2956,7 +3033,7 @@
         return rate + ' Гц';
     }
 
-    function audioTrackView(track, position) {
+    function audioTrackView(track, position, selectable) {
         var index = (track && track.index !== undefined) ? track.index : position;
         var language = (track && track.language) ? String(track.language) : '';
         var title = (track && (track.title || track.label)) ? String(track.title || track.label) : '';
@@ -2969,7 +3046,8 @@
             codec: audioCodecLabel(track && track.codec),
             channels: audioChannelsLabel(track && track.channels),
             sampleRate: audioSampleRateLabel(track && track.sampleRate),
-            enabled: !!(track && track.enabled)
+            enabled: !!(track && track.enabled),
+            selectable: selectable !== false
         };
     }
 
@@ -2984,6 +3062,20 @@
             list = null;
         }
 
+        // HTML5 у Chromium не має audioTracks, але метадані TorrServer/ffprobe
+        // можуть бути доступні. Показуємо їх як інформацію, без фальшивого перемикання.
+        if ((list === null || !list.length) && s.mediaMeta && s.mediaMeta.audio && s.mediaMeta.audio.length) {
+            var metaViews = [];
+
+            for (var m = 0; m < s.mediaMeta.audio.length; m++) {
+                metaViews.push(audioTrackView(s.mediaMeta.audio[m], m, false));
+            }
+
+            s.ui.renderAudio(metaViews);
+            s.ui.setAudioStatus('Показано метадані TorrServer. Перемикання в цьому рушії недоступне: браузер не надає audioTracks.', false);
+            return;
+        }
+
         if (list === null) {
             s.ui.clearAudio();
             s.ui.setAudioStatus('Цей рушій не надає список аудіодоріжок. Якщо звук відсутній, браузер може не підтримувати аудіокодек (наприклад, AC-3/E-AC-3/DTS).', true);
@@ -2993,7 +3085,7 @@
         var views = [];
 
         for (var i = 0; i < list.length; i++) {
-            views.push(audioTrackView(list[i], i));
+            views.push(audioTrackView(list[i], i, true));
         }
 
         s.ui.renderAudio(views);
@@ -3026,7 +3118,11 @@
         }
 
         if (!list || !list.length) {
-            s.ui.setAudioStatus('Не вдалося отримати список аудіодоріжок.', true);
+            if (s.mediaMeta && s.mediaMeta.audio && s.mediaMeta.audio.length) {
+                s.ui.setAudioStatus('Метадані доріжок є, але перемикання недоступне: браузер не надає audioTracks.', true);
+            } else {
+                s.ui.setAudioStatus('Не вдалося отримати список аудіодоріжок.', true);
+            }
             return false;
         }
 
@@ -3575,6 +3671,7 @@
             selectAudioTrack: selectAudioTrack,
             audioTrackView: audioTrackView,
             extractFfprobeMeta: extractFfprobeMeta,
+            probeTorrentMetadata: probeTorrentMetadata,
             buildVideoFormat: buildVideoFormat,
             collectAudioLines: collectAudioLines,
             createDownloadMeter: createDownloadMeter,

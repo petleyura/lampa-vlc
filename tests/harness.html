@@ -331,7 +331,9 @@
                 line(T.media.playCount > beforePlay, '24. Кнопка Play/Pause продовжує працювати');
 
                 /* ---------- 24a-24g. Аудіодоріжки ---------- */
-                line(!!document.querySelector('[data-act="audio"]'), '24a. Є кнопка «Аудіодоріжка»');
+                line(!!document.querySelector('[data-act="audio"]') &&
+                    document.querySelector('[data-act="audio"]').textContent.indexOf('АУДІО') > -1,
+                    '24a. Є видима кнопка «АУДІО»');
 
                 click('[data-act="audio"]');
                 await wait(30);

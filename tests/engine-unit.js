@@ -362,6 +362,35 @@ check('ffprobe: аудіокодек E-AC-3/5.1/48000', ffprobe.audio[0].codec =
     ffprobe.audio[0].channels === 6 && ffprobe.audio[0].sampleRate === '48000');
 
 check('ffprobe відсутній → null', internals.extractFfprobeMeta({}) === null);
+
+/* ---------- TorrServer /ffp → mediaMeta ---------- */
+var savedTorserver = global.window.Lampa.Torserver;
+var savedReguest = global.window.Lampa.Reguest;
+
+global.window.Lampa.Torserver = { url: function () { return 'http://torrserver:8090'; } };
+global.window.Lampa.Reguest = function () {
+    this.timeout = function () {};
+    this.silent = function (url, success) {
+        this.url = url;
+        success({
+            format: { format_name: 'matroska,webm', bit_rate: '8000000' },
+            streams: [
+                { codec_type: 'video', codec_name: 'h264', width: 1920, height: 1080, r_frame_rate: '24/1' },
+                { codec_type: 'audio', index: 1, codec_name: 'ac3', channels: 2, sample_rate: '48000', tags: { language: 'uk' } }
+            ]
+        });
+    };
+};
+
+var probeSession = { data: { torrent_hash: 'abc', id: 3 }, destroying: false, mediaMeta: null, probeStarted: false, debug: null, ui: null };
+internals.probeTorrentMetadata(probeSession);
+check('TorrServer /ffp: контейнер/кодек', probeSession.mediaMeta && probeSession.mediaMeta.container === 'MKV' &&
+    probeSession.mediaMeta.codec === 'H.264', JSON.stringify(probeSession.mediaMeta));
+check('TorrServer /ffp: аудіодоріжка AC-3', probeSession.mediaMeta && probeSession.mediaMeta.audio[0].codec === 'AC-3' &&
+    probeSession.mediaMeta.audio[0].language === 'uk', JSON.stringify(probeSession.mediaMeta && probeSession.mediaMeta.audio));
+
+global.window.Lampa.Torserver = savedTorserver;
+global.window.Lampa.Reguest = savedReguest;
 check('formatBytesPerSecond: КБ/с', internals.formatBytesPerSecond(500 * 1024) === '500 КБ/с');
 check('formatBytesPerSecond: МБ/с з комою', internals.formatBytesPerSecond(2.5 * 1024 * 1024) === '2,5 МБ/с');
 check('formatDownload: фактична швидкість', internals.formatDownload({ mode: 'actual', speed: 1024 }) === '1,0 КБ/с');
