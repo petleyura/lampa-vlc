@@ -1,0 +1,49 @@
+# OS / editors
+Thumbs.db
+Desktop.ini
+.DS_Store
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Node / tooling
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Logs / temp / cache
+*.log
+logs/
+tmp/
+temp/
+*.tmp
+*.bak
+*.orig
+*.rej
+.cache/
+
+# Local environment
+.env
+.env.*
+!.env.example
+
+# Internal development materials
+/docs/
+/Lampa_player-dev/
+/reports/
+/plans/
+/research/
+/screenshots/
+/experiments/
+/ETAP-*.md
+
+# Archives / local builds
+*.zip
+*.7z
+*.rar
+*.tar
+*.tar.gz
+*.tgz

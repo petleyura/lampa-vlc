@@ -1,261 +1,239 @@
 # Lampa VLC Player
 
-Незалежний HTML5-програвач для медіапорталу **Lampa** у стилі VLC.
-Плагін перехоплює запуск відео, скасовує штатний плеєр Lampa та відкриває
-власний повноекранний інтерфейс.
+Незалежний повноекранний плеєр для медіапорталу **Lampa** у стилі VLC. Плагін перехоплює запуск відео, скасовує штатний плеєр Lampa та відкриває власний інтерфейс.
 
-> Поточний статус: **Етап 4.3** — HTML5 + Samsung Tizen AVPlay через спільний
-> ENGINE_CONTRACT, меню Lampa, Debug Panel, fallback AVPlay → HTML5.
-> webOS, Android Intent, IPTV — наступні етапи.
+> **Поточна версія: v0.5.0.** У меню Lampa плеєр зараз називається **VLC Player**. Перейменування на **Кастомний плеєр** заплановане в окремому оновленні; у поточній версії пункту «Кастомний плеєр» ще немає.
 
 ---
 
-## Файли
+## Українська
 
-| Файл | Призначення |
-|---|---|
-| `Lampa-VLC-Player.js` | Плагін (один файл, IIFE, без зовнішніх залежностей) |
-| `tests/harness.html` | Браузерний тест-стенд із імітацією Lampa (43 перевірки) |
-| `tests/static-check.js` | Статична перевірка коду в Node (82 перевірки) |
-| `tests/menu-unit.js` | Node-тест меню та гейта вибору плеєра (17 перевірок) |
-| `tests/engine-unit.js` | Node-тест контракту Html5Engine (64 перевірки) |
-| `tests/avplay-unit.js` | Node-тест TizenAvplayEngine із заглушкою webapis.avplay (47 перевірок) |
-| `docs/ETAP-1-tech-report.md` | Технічне дослідження API Lampa (Етап 1) |
-| `docs/ETAP-3-player-architecture-research.md` | Архітектурне дослідження Tizen/webOS (Етап 3) |
-| `docs/ETAP-4.1-report.md` | Звіт Етапу 4.1 |
-| `docs/ETAP-4.2-report.md` | Звіт Етапу 4.2 |
-| `docs/ETAP-4.3-report.md` | Звіт Етапу 4.3 |
+### Призначення
 
----
+Плеєр призначений для перегляду відео в Lampa без штатного плеєра: власні контролери, прогрес-бар, швидкість відтворення, діагностика та підтримка Tizen AVPlay.
 
-## Як підключити до Lampa
+### Встановлення в Lampa
 
-### Варіант A. Як звичайний плагін (рекомендовано для ПК)
+1. Відкрийте Lampa.
+2. Перейдіть: **Налаштування → Плагіни → Додати плагін** (у деяких версіях Lampa розділ може називатися **Розширення**).
+3. Вкажіть адресу плагіна:
 
-1. Розмістіть `Lampa-VLC-Player.js` на будь-якому HTTP-сервері, доступному з браузера, наприклад:
-   ```powershell
-   # у папці проєкту
-   npx http-server -p 8080 -c-1
    ```
-   Або відкрийте Lampa через `file://` і додайте скрипт вручну (варіант B).
-2. У Lampa: **Налаштування → Розширення → Плагіни → Додати**
-3. Вкажіть URL: `http://localhost:8080/Lampa-VLC-Player.js`
-4. Перезавантажте Lampa (F5).
+   https://cdn.jsdelivr.net/gh/petleyura/lampa-vlc@main/Lampa-VLC-Player.js
+   ```
 
-### Варіант B. Ручна ін’єкція (для швидкого тесту)
+4. Підтвердіть додавання та перезавантажте Lampa (F5).
 
-Відкрийте Lampa, у консолі браузера (F12) виконайте:
+Для локальної розробки можна розмістити `Lampa-VLC-Player.js` на власному HTTP-сервері та вказати його URL.
 
-```js
-var s = document.createElement('script');
-s.src = 'http://localhost:8080/Lampa-VLC-Player.js';
-document.body.appendChild(s);
-```
+### Вибір плеєра
 
-Плагін сам дочекається `window.appready` (якщо Lampa ще не готова) і підпишеться
-на `Lampa.Player.listener` → `create`.
+Після встановлення відкрийте: **Налаштування → Плеєр**.
 
-### Вимкнення без видалення
+- **Плеєр** — виберіть **VLC Player** для звичайного відео.
+- **Плеєр для торентів** — виберіть **VLC Player** для потоків TorrServer.
+- **Плеєр для IPTV** — пункт є, але перехоплення IPTV у v0.5.0 **не реалізовано**.
 
-```js
-Lampa.Storage.set('vlc_player_enabled', 'false');  // вимкнути
-Lampa.Storage.set('vlc_player_enabled', 'true');   // увімкнути
-```
+Якщо вибрано інший плеєр, плагін не втручається у відтворення.
 
-або з консолі: `__lampaVlcPlayer.setEnabled(false)`.
+### Можливості
 
----
+- перехоплення запуску відео та блокування штатного плеєра Lampa;
+- власний повноекранний інтерфейс;
+- play/pause, перемотування, прогрес-бар, швидкість 0.5×–2×;
+- керування з клавіатури та базові команди пульта;
+- HTML5-рушій для ПК/Android/webOS;
+- Tizen AVPlay, якщо доступний `webapis.avplay`;
+- автоматичний fallback AVPlay → HTML5;
+- Debug Panel;
+- збереження прогресу через Timeline Lampa.
 
-## Вибір плеєра в Lampa
+### Формати відео
 
-Після завантаження плагін додає пункт **VLC Player** у три налаштування:
+Плагін **не містить власних декодерів**. Усе залежить від HTML5-рушія браузера або Tizen AVPlay.
 
-- **Плеєр** (`player`) — звичайне відео;
-- **Плеєр для торентів** (`player_torrent`) — потоки TorrServer;
-- **Плеєр для IPTV** (`player_iptv`) — пункт є, але IPTV ще не перехоплюється
-  (див. обмеження).
-
-Налаштування: **Lampa → Налаштування → Плеєр**. Вибір зберігається у
-`localStorage` Lampa і переживає перезапуск. Якщо вибрано будь-який інший
-плеєр, плагін не втручається у відтворення.
-
-Перевірити поточний вибір:
-
-```js
-Lampa.Storage.field('player')          // 'vlc' або інше
-__lampaVlcPlayer.isVlcSelected({})     // true/false
-```
-
----
-
-## Керування
-
-| Дія | Клавіша / елемент |
+| Контейнер | Стан |
 |---|---|
-| Play / Pause | `Space`, клік по відео, кнопка ▶/⏸ |
-| Назад 10 с | `←`, кнопка ⟲10 |
-| Вперед 10 с | `→`, кнопка ⟳10 |
-| Закрити плеєр | `Esc`, кнопка ✕ |
-| Підтвердити кнопку | `Enter` (коли кнопка у фокусі), інакше Play/Pause |
-| Позиція | клік або перетягування прогрес-бара |
-| Налаштування | кнопка ⚙ (швидкість відтворення, інфо про джерело) |
+| MP4 | HTML5 — типово; на Tizen AVPlay — за специфікацією Samsung; **на реальних пристроях не тестовано** |
+| WebM | залежить від браузера; на Tizen/webOS не підтверджено |
+| MKV | у Chromium часто не відтворюється; Tizen AVPlay/webOS — за специфікацією; **не тестовано** |
+| TS/M2TS | залежить від платформи; **не тестовано** |
+| AVI | у Chromium зазвичай ні; Tizen AVPlay/webOS — за специфікацією; **не тестовано** |
+| HLS/DASH | **не реалізовано** |
 
-Панель автоматично ховається через 3 секунди під час відтворення; з’являється
-при русі миші або натисканні клавіші.
+### Відеокодеки
 
-Клавіатура перехоплюється у фазі **capture** на `window`, тому штатна навігація
-Lampa не отримує ці ж натискання, поки плеєр відкритий.
+| Кодек | Стан |
+|---|---|
+| H.264 | базова підтримка HTML5/AVPlay; **не тестовано на пристроях** |
+| HEVC | лише якщо підтримує браузер/ОС/AVPlay; **умовно** |
+| AV1 | залежить від браузера/моделі TV; **умовно** |
+| VP9 | залежить від браузера/моделі TV; **умовно** |
+| MPEG-2 | зазвичай лише на TV-рушіях; **умовно** |
 
----
+### Аудіокодеки
 
-## Тестування
+| Кодек | Стан |
+|---|---|
+| AAC | типова підтримка HTML5/AVPlay |
+| MP3 | типова підтримка HTML5/AVPlay |
+| Opus/FLAC | залежить від браузера/моделі |
+| AC-3 | у Chromium **немає**; Tizen AVPlay — так; webOS — за моделлю |
+| E-AC-3 | у Chromium **немає**; Tizen AVPlay — так; webOS — за моделлю |
+| DTS/DTS-HD/TrueHD | у HTML5 **немає**; на TV — за моделлю; переважно не підтримується |
 
-### 1. Статична перевірка (Node)
+**Вибір аудіодоріжок у UI відсутній.** `Html5Engine.audioTracks()` у Chromium зазвичай повертає `null`; Tizen AVPlay має технічну можливість вибору, але кнопок у панелі ще немає.
 
-```powershell
-node tests/static-check.js
-```
+### Субтитри
 
-Очікуваний результат: `SUMMARY passed=82 failed=0`.
+- WebVTT — лише якщо браузер/потік уже надає `textTracks`.
+- UI вибору субтитрів **немає**.
+- Зовнішні SRT/ASS плагіном **не підключаються**.
+- Tizen AVPlay має текстовий трек, але UI теж немає.
 
-### 2. Unit-тест меню та гейта (Node)
+### Сумісність
 
-```powershell
-node tests/menu-unit.js
-```
+| Платформа | Стан |
+|---|---|
+| Windows Chrome/Edge | HTML5; **на реальному пристрої не тестовано** |
+| Android TV | HTML5/WebView; **не тестовано** |
+| Samsung Tizen | AVPlay, якщо є `webapis.avplay`; інакше HTML5; **не тестовано на TV** |
+| LG webOS | HTML5; **не тестовано** |
 
-Очікуваний результат: `SUMMARY passed=17 failed=0`.
-Перевіряє додавання опції `vlc` у три налаштування, відсутність дублікатів,
-збереження `default` і правильність вибору джерела (`player` / `player_torrent`).
+Плагін не містить нативних бібліотек і не встановлює зовнішні плеєри.
 
-### 3. Unit-тест контракту рушія (Node)
+### Відомі обмеження
 
-```powershell
-node tests/engine-unit.js
-```
+- немає UI вибору аудіодоріжок і субтитрів;
+- IPTV-пункт є, але IPTV не перехоплюється;
+- HLS/DASH не підтримуються;
+- MKV/HEVC/AC-3/DTS залежать від браузера або моделі TV;
+- власних декодерів немає;
+- Debug Panel увімкнена завжди;
+- повноекранний режим — у межах вікна браузера, без Fullscreen API;
+- на частині моделей Tizen відео AVPlay може не композитися з HTML-панеллю;
+- реальні тести на Tizen/webOS/Android TV не проводилися.
 
-Очікуваний результат: `SUMMARY passed=64 failed=0`.
-Перевіряє `ENGINE_CONTRACT`, `Html5Engine` (mount/load/seek/rate/треки/події/destroy),
-відсутність витоків обробників і ізоляцію двох екземплярів рушія.
+### Версія та ліцензія
 
-### 4. Unit-тест Tizen AVPlay (Node)
-
-```powershell
-node tests/avplay-unit.js
-```
-
-Очікуваний результат: `SUMMARY passed=47 failed=0`.
-Використовує керовану заглушку `webapis.avplay`: життєвий цикл
-`open → prepareAsync → play`, pause/resume, seek, доріжки, події, помилки,
-destroy, повторне створення, fallback на HTML5.
-
-> Заглушка **не підтверджує** роботу на реальному Samsung TV — потрібен пристрій.
-
-### 5. Браузерний тест-стенд
-
-Відкрийте у Chrome/Opera:
-
-```
-tests/harness.html
-```
-
-Стенд імітує Lampa (`Lampa.Listener`, `Lampa.Params`, `Lampa.Player.listener`,
-`Lampa.Controller`, `Lampa.Storage`, `Lampa.Torserver.toPlayUrl`,
-`HTMLMediaElement.play/pause`) і виконує 43 перевірки: меню, гейт вибору,
-перехоплення `create`, відсутність штатного плеєра, DOM, URL, Debug Panel,
-метрики, Engine/Player Core, відсутність AVPlay у браузері, `Escape`,
-повернення контролера, повторний запуск, помилку декодування.
-
-### 6. Реальна перевірка в Lampa
-
-1. Запустіть Lampa у Chrome.
-2. Підключіть плагін (див. вище).
-3. Відкрийте фільм → «Грати».
-4. Очікувано: штатний плеєр не з’являється, відкривається VLC-панель.
-5. `Esc` → повернення до картки.
+- Версія: **v0.5.0** (2026-11-01).
+- Історія змін: [CHANGELOG.md](CHANGELOG.md).
+- Ліцензія: [MIT](LICENSE).
 
 ---
 
-## Архітектура (всередині одного файлу)
+## English
 
-```
-init            — очікування app ready, ін’єкція CSS, меню, підписка
-interceptor     — 'create' → перевірка вибору → abort() → Session.open()
-Player Core     — Session: життєвий цикл, контролер, таймлайн, body-lock
-EngineFactory   — вибір рушія: tizen-avplay або html5 (fallback)
-Html5Engine     — <video>: load/play/pause/seek/rate/треки/помилки/destroy
-TizenAvplayEng. — <object type="application/avplayer"> + webapis.avplay
-ui              — повноекранний контейнер + VLC-панель (DOM + CSS)
-controls        — кнопки, прогрес-бар, налаштування
-remote          — клавіатура (capture), заготовка під Lampa.Keypad
-Debug Panel     — метрики через контракт рушія, журнал подій
-```
+### Purpose
 
-**Контракт рушія** (`ENGINE_CONTRACT`): `mount`, `load`, `play`, `pause`,
-`toggle`, `seek`, `setRate`, `time`, `duration`, `buffered`, `videoSize`,
-`audioTracks`, `selectAudio`, `subtitleTracks`, `selectSubtitle`,
-`setSubtitleDelay`, `destroy`. Плюс `name`, `capabilities()`, `seekBy()`,
-`paused()`, `rate()`.
+A standalone full-screen player for the **Lampa** media portal with a VLC-style interface. The plugin intercepts playback, aborts Lampa's stock player, and opens its own UI.
 
-Player Core не звертається до `<video>`/AVPlay напряму: усе — через методи рушія.
-`EngineFactory.platformId()` вибирає `tizen-avplay` лише коли
-`Lampa.Platform.is('tizen')` **і** доступний `webapis.avplay` з потрібними методами;
-інакше — `html5`. User-Agent не використовується.
+> **Current version: v0.5.0.** The Lampa menu item is currently named **VLC Player**. The planned rename to **Кастомний плеєр** (Custom Player) is not available in this version yet.
 
-При фатальній помилці AVPlay Player Core один раз перемикається на HTML5
-(`fallbackUsed`), попередньо знищивши AVPlay-рушій.
+### Installation
 
-`audioTracks()` повертає `null`, якщо браузер не реалізує API (Chromium),
-`setSubtitleDelay()` в HTML5 повертає `false` — фіктивна підтримка не імітується.
+1. Open Lampa.
+2. Go to **Settings → Plugins → Add plugin** (in some Lampa versions the section is called **Extensions**).
+3. Enter the plugin URL:
 
----
+   ```
+   https://cdn.jsdelivr.net/gh/petleyura/lampa-vlc@main/Lampa-VLC-Player.js
+   ```
 
-## Відомі обмеження Етапу 4.3
+4. Confirm and reload Lampa (F5).
 
-- Лише прогресивний HTTP(S) (MP4/WebM). HLS/DASH поки не підключаються — нативний HLS є лише в Safari.
-- MKV/HEVC/AC-3 залежать від браузера; у Chromium часто не відтворюються (буде показано помилку).
-- Немає UI вибору аудіодоріжок і субтитрів: контракт рушія вже має `audioTracks`/`selectAudio`/`subtitleTracks`/`selectSubtitle`, але кнопок у панелі ще немає; `setSubtitleDelay` в HTML5 не підтримується (`false`).
-- **IPTV:** пункт `player_iptv` додано в меню, але `Lampa.Player.iptv()` не надсилає подію `create`,
-  тому перехоплення IPTV ще не реалізовано (потрібна обгортка `Player.iptv` — наступний етап).
-- **Швидкість у Debug Panel** — оцінка наповнення буфера, а не бітрейт; позначена `ESTIMATED`.
-- Панель діагностики увімкнена завжди під час розробки (`CONFIG.debugPanel`).
-- Немає підтримки таймлайну Lampa у зворотному напрямку (відображення прогресу на картці одразу після закриття може потребувати перезавантаження екрана).
-- Повноекранний режим — вікно браузера (Fullscreen API не використовується).
-- Tizen/webOS/Android TV не тестувалися; ключові коди (10009, 461, 4/27) ще не підключені до `Lampa.Keypad`.
-- **AVPlay** активний лише в Tizen-застосунку з `webapis.avplay`; у браузері TV використовується HTML5.
-- **AVPlay не має buffered ranges** — Debug Panel показує `N/A` замість вигаданих секунд.
-- `getTotalTrackInfo()` у READY після `prepareAsync()` може бути порожнім (Samsung документує READY лише для синхронного `prepare()`); вибір доріжок в UI ще не реалізовано.
-- Відеоплощина AVPlay може не композитися з HTML-оверлеєм на частині моделей — видимість VLC-панелі над відео треба перевірити на реальному TV.
+For local development, serve `Lampa-VLC-Player.js` from your own HTTP server and use that URL.
 
----
+### Selecting the player
 
-## Діагностика
+Open **Settings → Player**:
 
-У плеєрі є вбудована панель **VLC PLAYER DEBUG** (верхній лівий кут). Вона показує:
+- **Player** — select **VLC Player** for regular video.
+- **Player for torrents** — select **VLC Player** for TorrServer streams.
+- **Player for IPTV** — the option exists, but IPTV interception is **not implemented** in v0.5.0.
 
-- стан (`INITIALIZING`, `LOADING`, `PLAYING`, `PAUSED`, `BUFFERING`, `ERROR`, `STOPPED`);
-- тип джерела (`LINK`, `TorrServer`, `IPTV`, `UNKNOWN`);
-- час, тривалість, роздільність (`N/A`, якщо недоступно);
-- буфер — реальні секунди з `video.buffered` після поточної позиції;
-- швидкість наповнення буфера — `≈N× (ESTIMATED)` (це не бітрейт і не швидкість мережі);
-- рушій (`HTML5`);
-- останню помилку (код + опис);
-- журнал останніх 14 технічних подій.
+If another player is selected, the plugin does not interfere with playback.
 
-Панель не перехоплює кліки (`pointer-events: none`) і видаляється разом із плеєром.
-Вимкнути її можна в консолі: `__lampaVlcPlayer.config.debugPanel = false` (до відкриття плеєра).
+### Features
 
-Увімкніть логування, додавши `?vlcdebug=1` до URL Lampa, або:
+- intercepts playback and blocks Lampa's stock player;
+- custom full-screen UI;
+- play/pause, seeking, progress bar, 0.5×–2× speed;
+- keyboard and basic remote control;
+- HTML5 engine for desktop/Android/webOS;
+- Tizen AVPlay when `webapis.avplay` is available;
+- automatic AVPlay → HTML5 fallback;
+- Debug Panel;
+- progress saving through Lampa Timeline.
 
-```js
-__lampaVlcPlayer.config.debug = true;
-```
+### Video containers
 
-Корисні команди в консолі:
+The plugin **does not bundle decoders**. Support depends on the browser's HTML5 engine or Tizen AVPlay.
 
-```js
-__lampaVlcPlayer.isReady()    // плагін ініціалізовано
-__lampaVlcPlayer.isOpen()     // плеєр відкритий
-__lampaVlcPlayer.session()    // поточна сесія
-__lampaVlcPlayer.close()      // примусово закрити
-```
+| Container | Status |
+|---|---|
+| MP4 | HTML5 — typical; Tizen AVPlay — per Samsung specification; **not device-tested** |
+| WebM | browser-dependent; Tizen/webOS not confirmed |
+| MKV | often unsupported in Chromium; Tizen AVPlay/webOS per specification; **not tested** |
+| TS/M2TS | platform-dependent; **not tested** |
+| AVI | usually not in Chromium; Tizen AVPlay/webOS per specification; **not tested** |
+| HLS/DASH | **not implemented** |
+
+### Video codecs
+
+| Codec | Status |
+|---|---|
+| H.264 | basic HTML5/AVPlay support; **not device-tested** |
+| HEVC | only if the browser/OS/AVPlay supports it; **conditional** |
+| AV1 | browser/TV model dependent; **conditional** |
+| VP9 | browser/TV model dependent; **conditional** |
+| MPEG-2 | mostly TV engines only; **conditional** |
+
+### Audio codecs
+
+| Codec | Status |
+|---|---|
+| AAC | typical HTML5/AVPlay support |
+| MP3 | typical HTML5/AVPlay support |
+| Opus/FLAC | browser/model dependent |
+| AC-3 | **not in Chromium**; Tizen AVPlay — yes; webOS — model dependent |
+| E-AC-3 | **not in Chromium**; Tizen AVPlay — yes; webOS — model dependent |
+| DTS/DTS-HD/TrueHD | **not in HTML5**; TV model dependent; mostly unsupported |
+
+**There is no audio-track selection UI.** `Html5Engine.audioTracks()` usually returns `null` in Chromium; Tizen AVPlay has the technical capability, but no panel controls yet.
+
+### Subtitles
+
+- WebVTT only when the browser/stream already exposes `textTracks`.
+- No subtitle selection UI.
+- External SRT/ASS files are **not** loaded by the plugin.
+- Tizen AVPlay has a text track, but no UI either.
+
+### Compatibility
+
+| Platform | Status |
+|---|---|
+| Windows Chrome/Edge | HTML5; **not device-tested** |
+| Android TV | HTML5/WebView; **not tested** |
+| Samsung Tizen | AVPlay when `webapis.avplay` exists; otherwise HTML5; **not tested on a TV** |
+| LG webOS | HTML5; **not tested** |
+
+The plugin does not include native libraries and does not launch external players.
+
+### Known limitations
+
+- no audio/subtitle selection UI;
+- IPTV option exists but IPTV is not intercepted;
+- no HLS/DASH support;
+- MKV/HEVC/AC-3/DTS depend on the browser or TV model;
+- no bundled decoders;
+- Debug Panel is always enabled;
+- full-screen mode is limited to the browser window (no Fullscreen API);
+- on some Tizen models AVPlay video may not composite with the HTML panel;
+- no real-device testing on Tizen/webOS/Android TV has been performed.
+
+### Version and license
+
+- Version: **v0.5.0** (2026-11-01).
+- Changelog: [CHANGELOG.md](CHANGELOG.md).
+- License: [MIT](LICENSE).
