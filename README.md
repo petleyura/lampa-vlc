@@ -4,6 +4,8 @@
 
 > **Поточна версія: v0.6.0.** У меню Lampa плеєр зараз називається **VLC Player**. Перейменування на **Кастомний плеєр** заплановане в окремому оновленні; у поточній версії пункту «Кастомний плеєр» ще немає.
 
+Сторінка проєкту: https://petleyura.github.io/lampa-vlc/
+
 ---
 
 ## Українська
@@ -46,8 +48,22 @@
 - Tizen AVPlay, якщо доступний `webapis.avplay`;
 - автоматичний fallback AVPlay → HTML5;
 - вибір аудіодоріжки, якщо рушій надає список доріжок;
+- **AudioSyncEngine** для torrent-джерел із AC-3/E-AC-3 у Chromium: `<video muted>` + WASM-декодер + WebAudio;
 - українська Debug Panel;
 - збереження прогресу через Timeline Lampa.
+
+### AudioSyncEngine (Етап 6.4.3)
+
+Для torrent-джерел із AC-3/E-AC-3 на ПК (Chrome/Edge) плагін може додатково
+завантажити `vendor/mediabunny.min.mjs` + `vendor/mediabunny-ac3.min.mjs`
+(разом ≈1,9 МБ, ліниво, лише коли потрібен декодер) і відтворювати звук через
+WebAudio, тримаючи `<video>` без звуку.
+
+- аудіо синхронізується за `video.currentTime`;
+- підтримуються Play/Pause, Seek, перемикання доріжок без перезапуску відео;
+- E-AC-3 5.1 downmix у stereo виконує WebAudio;
+- якщо WASM/WebAudio не запустилися, відео повертається до звичайного HTML5-режиму;
+- **не активується на Tizen AVPlay** і не заявляє підтримку TV без тестів.
 
 ### Діагностика
 
@@ -56,11 +72,13 @@ Debug Panel показує:
 - **ШВИДКІСТЬ ЗАВАНТАЖЕННЯ** — фактичні `transferSize` з Resource Timing, якщо браузер їх надає; інакше явно позначена оцінка за приростом буфера. Додаткових мережевих запитів для цього немає.
 - **ФОРМАТ ВІДЕО** — контейнер, відеокодек, роздільність і FPS лише з фактичних метаданих (`data.ffprobe`, AVPlay або іншого API); якщо даних немає — `Н/Д`/`Недоступно`. Кодек не визначається за розширенням URL.
 - **АУДІОДОРІЖКИ** — номер, назва/мова, кодек, канали, частота та активна доріжка з метаданих рушія.
+- **AudioSync** — відео- та аудіорушій, кодеки, активна доріжка, синхронізація в мс, аудіобуфер, PCM-фрагменти, underruns, resyncs, остання помилка.
 - Для торентів метадані додатково читаються з TorrServer `/ffp/{hash}/{id}`; якщо endpoint недоступний, показуються `Н/Д`.
 
 ### Формати відео
 
-Плагін **не містить власних декодерів**. Усе залежить від HTML5-рушія браузера або Tizen AVPlay.
+Плагін не має власного відеодекодера: відео завжди відтворює HTML5 або Tizen AVPlay.
+AudioSync додає лише аудіодекодер для AC-3/E-AC-3 у torrent-режимі.
 
 | Контейнер | Стан |
 |---|---|
@@ -88,14 +106,15 @@ Debug Panel показує:
 | AAC | типова підтримка HTML5/AVPlay |
 | MP3 | типова підтримка HTML5/AVPlay |
 | Opus/FLAC | залежить від браузера/моделі |
-| AC-3 | у Chromium **немає**; Tizen AVPlay — так; webOS — за моделлю |
-| E-AC-3 | у Chromium **немає**; Tizen AVPlay — так; webOS — за моделлю |
+| AC-3 | Chromium — **AudioSync/WASM для torrent**; без нього HTML5 не декодує; Tizen AVPlay — за моделлю; webOS — за моделлю |
+| E-AC-3 | Chromium — **AudioSync/WASM для torrent**; без нього HTML5 не декодує; Tizen AVPlay — за моделлю; webOS — за моделлю |
 | DTS/DTS-HD/TrueHD | у HTML5 **немає**; на TV — за моделлю; переважно не підтримується |
 
 **Вибір аудіодоріжок** доступний через кнопку **«Аудіодоріжка»**, якщо рушій надає список:
 
 - **Tizen AVPlay** — реальне перемикання через `setSelectTrack`;
 - **HTML5** — лише якщо браузер реалізує `HTMLMediaElement.audioTracks` (у Chromium зазвичай **ні**);
+- **AudioSync для torrent AC-3/E-AC-3** — реальне перемикання через WASM/WebAudio без перезапуску відео;
 - якщо списку немає — плеєр показує пояснення, а не порожнє меню.
 
 Плагін не вигадує мову, кодек чи кількість каналів: показуються лише дані рушія, інакше `Н/Д`.
@@ -121,11 +140,13 @@ Debug Panel показує:
 ### Відомі обмеження
 
 - немає UI вибору субтитрів;
-- вибір аудіодоріжок залежить від рушія (у Chromium HTML5 API зазвичай відсутній);
+- нативний HTML5-вибір аудіодоріжок залежить від `HTMLMediaElement.audioTracks` (у Chromium зазвичай відсутній); AudioSync дає перемикання для torrent AC-3/E-AC-3;
 - IPTV-пункт є, але IPTV не перехоплюється;
 - HLS/DASH не підтримуються;
 - MKV/HEVC/AC-3/DTS залежать від браузера або моделі TV;
-- власних декодерів немає;
+- AudioSync (AC-3/E-AC-3) активний лише для torrent-джерел на ПК; перевірено в Chrome та Edge (Chromium) у локальному harness, реальна Lampa/TV — ні;
+- AudioSync ліниво завантажує ~1,9 МБ vendor-модулів; якщо CSP/мережа блокують їх, AC-3/E-AC-3 звуку не буде;
+- DTS і повне перемикання доріжок у нативному HTML5 не реалізовані;
 - Debug Panel увімкнена завжди;
 - повноекранний режим — у межах вікна браузера, без Fullscreen API;
 - на частині моделей Tizen відео AVPlay може не композитися з HTML-панеллю;
@@ -146,6 +167,8 @@ Debug Panel показує:
 A standalone full-screen player for the **Lampa** media portal with a VLC-style interface. The plugin intercepts playback, aborts Lampa's stock player, and opens its own UI.
 
 > **Current version: v0.6.0.** The Lampa menu item is currently named **VLC Player**. The planned rename to **Кастомний плеєр** (Custom Player) is not available in this version yet.
+
+Project page: https://petleyura.github.io/lampa-vlc/
 
 ### Installation
 
@@ -181,8 +204,22 @@ If another player is selected, the plugin does not interfere with playback.
 - Tizen AVPlay when `webapis.avplay` is available;
 - automatic AVPlay → HTML5 fallback;
 - audio-track selection when the engine exposes a track list;
+- **AudioSyncEngine** for torrent AC-3/E-AC-3 in Chromium: muted `<video>` + WASM decoder + WebAudio;
 - Ukrainian Debug Panel;
 - progress saving through Lampa Timeline.
+
+### AudioSyncEngine (Stage 6.4.3)
+
+For torrent sources with AC-3/E-AC-3 on desktop Chrome/Edge, the plugin can lazily
+load `vendor/mediabunny.min.mjs` + `vendor/mediabunny-ac3.min.mjs` (≈1.9 MB total,
+only when a software decoder is needed) and play audio through WebAudio while
+keeping `<video>` muted.
+
+- audio is synchronized against `video.currentTime`;
+- Play/Pause, seeking, and track switching without restarting video;
+- E-AC-3 5.1 is downmixed to stereo by WebAudio;
+- if WASM/WebAudio fails, video returns to the normal HTML5 path;
+- **not activated on Tizen AVPlay**; no TV support is claimed without testing.
 
 ### Diagnostics
 
@@ -191,11 +228,13 @@ The Debug Panel shows:
 - **Download speed** — actual `transferSize` from Resource Timing when exposed; otherwise an explicitly marked estimate based on buffer growth. No extra network requests are made.
 - **Video format** — container, video codec, resolution, and FPS only from actual metadata (`data.ffprobe`, AVPlay, or another API); otherwise `N/A`/`Unavailable`. The codec is not inferred from the URL extension.
 - **Audio tracks** — number, title/language, codec, channels, sample rate, and the active track from engine metadata.
+- **AudioSync** — video/audio engine, codecs, active track, sync in ms, audio buffer, PCM fragments, underruns, resyncs, last error.
 - For torrents, metadata is also read from TorrServer `/ffp/{hash}/{id}`; if the endpoint is unavailable, `N/A` is shown.
 
 ### Video containers
 
-The plugin **does not bundle decoders**. Support depends on the browser's HTML5 engine or Tizen AVPlay.
+The plugin has no video decoder; video is always rendered by HTML5 or Tizen AVPlay.
+AudioSync only adds an AC-3/E-AC-3 audio decoder for the torrent path.
 
 | Container | Status |
 |---|---|
@@ -223,14 +262,15 @@ The plugin **does not bundle decoders**. Support depends on the browser's HTML5 
 | AAC | typical HTML5/AVPlay support |
 | MP3 | typical HTML5/AVPlay support |
 | Opus/FLAC | browser/model dependent |
-| AC-3 | **not in Chromium**; Tizen AVPlay — yes; webOS — model dependent |
-| E-AC-3 | **not in Chromium**; Tizen AVPlay — yes; webOS — model dependent |
+| AC-3 | Chromium — **AudioSync/WASM for torrents**; HTML5 alone cannot decode; Tizen AVPlay — model dependent; webOS — model dependent |
+| E-AC-3 | Chromium — **AudioSync/WASM for torrents**; HTML5 alone cannot decode; Tizen AVPlay — model dependent; webOS — model dependent |
 | DTS/DTS-HD/TrueHD | **not in HTML5**; TV model dependent; mostly unsupported |
 
 **Audio-track selection** is available through the **Audio track** button when the engine exposes a list:
 
 - **Tizen AVPlay** — real switching via `setSelectTrack`;
 - **HTML5** — only when the browser implements `HTMLMediaElement.audioTracks` (usually **not** in Chromium);
+- **AudioSync for torrent AC-3/E-AC-3** — real switching through WASM/WebAudio without restarting video;
 - if no list is available, the player shows an explanation instead of an empty menu.
 
 The plugin never invents language, codec, or channel data: only engine metadata is shown; otherwise `Н/Д` (N/A).
@@ -256,11 +296,13 @@ The plugin does not include native libraries and does not launch external player
 ### Known limitations
 
 - no subtitle selection UI;
-- audio-track selection depends on the engine (HTML5 API is usually absent in Chromium);
+- native HTML5 audio-track selection depends on `HTMLMediaElement.audioTracks` (usually absent in Chromium); AudioSync provides switching for torrent AC-3/E-AC-3;
 - IPTV option exists but IPTV is not intercepted;
 - no HLS/DASH support;
 - MKV/HEVC/AC-3/DTS depend on the browser or TV model;
-- no bundled decoders;
+- AudioSync (AC-3/E-AC-3) is active only for torrents on desktop; tested in Chrome and Edge (Chromium) in a local harness, not in real Lampa/TV;
+- AudioSync lazily loads ~1.9 MB of vendor modules; if CSP/network blocks them, AC-3/E-AC-3 will have no sound;
+- DTS and full native HTML5 track switching are not implemented;
 - Debug Panel is always enabled;
 - full-screen mode is limited to the browser window (no Fullscreen API);
 - on some Tizen models AVPlay video may not composite with the HTML panel;

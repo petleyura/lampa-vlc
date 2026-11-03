@@ -66,6 +66,14 @@ check('Прогрес-бар з буфером і повзунком', /vlc-buff
 check('Панель аудіодоріжок', /vlc-audio/.test(src) && /data-audio-list/.test(src) && /АУДІОДОРІЖКА/.test(src));
 check('Кнопка аудіо з видимим текстом', /data-act="audio"[\s\S]{0,220}АУДІО/.test(src));
 check('TorrServer /ffp для метаданих', /function probeTorrentMetadata/.test(src) && /\/ffp\//.test(src));
+check('AudioSyncEngine реалізовано', /function AudioSyncEngine/.test(src) && /audioSyncWanted/.test(src));
+check('AudioSync lazy vendor', /vendor\/mediabunny\.min\.mjs/.test(src) && /vendor\/mediabunny-ac3\.min\.mjs/.test(src));
+check('Vendor Mediabunny присутній', fs.existsSync(path.join(__dirname, '..', 'vendor', 'mediabunny.min.mjs')) &&
+    fs.statSync(path.join(__dirname, '..', 'vendor', 'mediabunny.min.mjs')).size > 700000);
+check('Vendor AC3 присутній', fs.existsSync(path.join(__dirname, '..', 'vendor', 'mediabunny-ac3.min.mjs')) &&
+    fs.statSync(path.join(__dirname, '..', 'vendor', 'mediabunny-ac3.min.mjs')).size > 1000000);
+check('AudioSync debug-поля', /data-d="audio-engine"/.test(src) && /data-d="sync"/.test(src) && /data-d="pcm"/.test(src));
+check('AudioSync не активується для Tizen', /tizen-avplay/.test(src) && /audioSyncWanted/.test(src));
 check('Отримання та перемикання аудіодоріжок', /function refreshAudioPanel/.test(src) && /function selectAudioTrack/.test(src));
 
 /* ---------- 6. Клавіатура ---------- */

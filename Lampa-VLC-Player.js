@@ -56,8 +56,19 @@
         debugEvents: 14,        // скільки останніх подій тримати в журналі
         menuOption: 'vlc',      // значення в Storage: player = 'vlc'
         menuLabel: 'VLC Player',
-        debug: /[?&]vlcdebug=1/.test(window.location.search)
+        debug: /[?&]vlcdebug=1/.test(window.location.search),
+        audioSync: true,
+        audioSyncAhead: 4,
+        audioSyncResyncMs: 300
     };
+
+    /**
+     * Базовий URL для lazy-load vendor-модулів (Mediabunny/AC3).
+     * У Lampa плагін завантажується з GitHub Pages, тому vendor лежить поруч.
+     */
+    var PLUGIN_SCRIPT_SRC = (document.currentScript && document.currentScript.src) || '';
+    var PLUGIN_BASE_URL = PLUGIN_SCRIPT_SRC ? PLUGIN_SCRIPT_SRC.replace(/[^/]*$/, '') : '';
+    var AUDIO_SYNC_VENDOR_BASE = PLUGIN_BASE_URL || 'https://petleyura.github.io/lampa-vlc/';
 
     /**
      * Українські підписи для Debug Panel.
@@ -751,6 +762,569 @@
     }
 
     /* =====================================================================
+     * 4.4. AudioSyncEngine
+     * ---------------------------------------------------------------------
+     * HTML5 <video muted> + Mediabunny demux + WASM AC-3/E-AC-3 + WebAudio.
+     * Активується ЛИШЕ для torrent-джерел і лише після реальної перевірки
+     * декодування першого PCM-фрагмента. Якщо активація не вдалася — відео
+     * повертається до звичайного HTML5-звуку (не мовчить примусово).
+     * ===================================================================== */
+
+    function audioSyncSupported() {
+        return !!(window.AudioContext || window.webkitAudioContext) &&
+            typeof window.WebAssembly !== 'undefined' &&
+            typeof window.fetch === 'function';
+    }
+
+    function audioSyncWanted(session) {
+        if (!session || !session.data) return false;
+        return !!(session.data.torrent_hash || session.data.torrent);
+    }
+
+    var audioModulesPromise = null;
+
+    function loadAudioSyncModules() {
+        if (!audioModulesPromise) {
+            audioModulesPromise = (async function () {
+                var base = AUDIO_SYNC_VENDOR_BASE;
+                var mbUrl = new URL('vendor/mediabunny.min.mjs', base).href;
+                var ac3Url = new URL('vendor/mediabunny-ac3.min.mjs', base).href;
+
+                var mb = await import(/* @vite-ignore */ mbUrl);
+                var ac3 = await import(/* @vite-ignore */ ac3Url);
+
+                if (ac3 && typeof ac3.registerAc3Decoder === 'function') ac3.registerAc3Decoder();
+
+                return { MB: mb, AC3: ac3 };
+            })().catch(function (error) {
+                audioModulesPromise = null;
+                throw error;
+            });
+        }
+
+        return audioModulesPromise;
+    }
+
+    function metaNeedsAudioSync(meta) {
+        if (!meta || !meta.audio) return false;
+        return meta.audio.some(function (track) {
+            return /ac-?3|eac-?3|dts/i.test(String(track && track.codec || ''));
+        });
+    }
+
+    function AudioSyncEngine(hooks, session) {
+        var base = Html5Engine(hooks);
+        var video = base.el;
+        var api = {};
+        var state = {
+            url: '',
+            meta: null,
+            active: false,
+            activating: false,
+            failed: false,
+            destroyed: false,
+            error: '',
+            tracks: [],
+            selected: 0,
+            input: null,
+            context: null,
+            sink: null,
+            iterator: null,
+            generation: 0,
+            running: false,
+            anchorVideo: 0,
+            anchorCtx: 0,
+            scheduledUntil: 0,
+            sources: [],
+            decoded: 0,
+            underruns: 0,
+            resyncs: 0,
+            gaps: 0,
+            overlaps: 0,
+            lastItemEnd: null,
+            lastSyncMs: NaN,
+            lastAudioTime: NaN,
+            lastResyncAt: 0
+        };
+        var disposers = [];
+        var timer = null;
+
+        Object.keys(base).forEach(function (key) { api[key] = base[key]; });
+
+        api.name = 'HTML5 + AudioSync';
+        api.el = video;
+
+        function on(name, fn) {
+            video.addEventListener(name, fn, false);
+            disposers.push(function () { video.removeEventListener(name, fn, false); });
+        }
+
+        function emitReady() {
+            safe(function () {
+                if (typeof hooks.onAudioReady === 'function') hooks.onAudioReady(api.audioDebug());
+            });
+        }
+
+        function remember(error) {
+            state.error = String(error && error.message ? error.message : error);
+            safe(function () {
+                if (typeof hooks.onAudioError === 'function') hooks.onAudioError(state.error);
+            });
+        }
+
+        function activeAudioTime() {
+            if (!state.context) return NaN;
+
+            var t = state.context.currentTime;
+            var result = NaN;
+
+            for (var i = 0; i < state.sources.length; i++) {
+                var item = state.sources[i];
+                if (t >= item.when && t <= item.when + item.duration) {
+                    result = item.timestamp + (t - item.when) * (item.rate || 1);
+                }
+            }
+
+            return result;
+        }
+
+        function bufferAhead() {
+            if (!state.running || !isFinite(state.scheduledUntil)) return 0;
+            return Math.max(0, state.scheduledUntil - (video.currentTime || 0));
+        }
+
+        function stopAudio() {
+            state.generation++;
+            state.running = false;
+
+            var oldIterator = state.iterator;
+            state.iterator = null;
+            state.sink = null;
+
+            if (oldIterator && typeof oldIterator.return === 'function') {
+                try { oldIterator.return(); } catch (error) { /* ignore */ }
+            }
+
+            for (var i = 0; i < state.sources.length; i++) {
+                try { state.sources[i].source.stop(); } catch (error) { /* ignore */ }
+                try { state.sources[i].source.disconnect(); } catch (error) { /* ignore */ }
+            }
+
+            state.sources = [];
+            state.scheduledUntil = 0;
+            state.lastAudioTime = NaN;
+            state.lastItemEnd = null;
+            state.gaps = 0;
+            state.overlaps = 0;
+        }
+
+        function schedule(item) {
+            if (!state.context || !item || !item.buffer || !isFinite(item.timestamp) || !isFinite(item.duration)) return;
+
+            if (state.lastItemEnd !== null) {
+                if (item.timestamp > state.lastItemEnd + 0.005) state.gaps++;
+                if (item.timestamp < state.lastItemEnd - 0.005) state.overlaps++;
+            }
+
+            state.lastItemEnd = item.timestamp + item.duration;
+
+            var startAt = state.anchorCtx + (item.timestamp - state.anchorVideo);
+            var when = Math.max(startAt, state.context.currentTime + 0.01);
+            var offset = Math.max(0, when - startAt);
+
+            if (offset >= item.duration) return;
+
+            var duration = item.duration - offset;
+            if (duration <= 0) return;
+
+            var source = state.context.createBufferSource();
+            source.buffer = item.buffer;
+            source.playbackRate.value = video.playbackRate || 1;
+
+            var rate = source.playbackRate.value;
+            source.connect(state.context.destination);
+
+            try {
+                source.start(when, offset, duration);
+            } catch (error) {
+                remember(error);
+                return;
+            }
+
+            var entry = {
+                source: source,
+                timestamp: item.timestamp + offset,
+                duration: duration,
+                when: when,
+                rate: rate
+            };
+
+            state.sources.push(entry);
+            state.decoded++;
+            state.scheduledUntil = Math.max(state.scheduledUntil, item.timestamp + item.duration);
+
+            source.onended = function () {
+                var index = state.sources.indexOf(entry);
+                if (index >= 0) state.sources.splice(index, 1);
+            };
+        }
+
+        function pump(gen, iterator) {
+            (async function () {
+                while (gen === state.generation && state.running) {
+                    if (bufferAhead() >= CONFIG.audioSyncAhead) {
+                        await new Promise(function (resolve) { setTimeout(resolve, 80); });
+                        continue;
+                    }
+
+                    var next;
+
+                    try {
+                        next = await iterator.next();
+                    } catch (error) {
+                        if (gen === state.generation) remember(error);
+                        break;
+                    }
+
+                    if (gen !== state.generation || next.done) break;
+                    if (next.value) schedule(next.value);
+                }
+            })().catch(remember);
+        }
+
+        async function startAt(time) {
+            if (!state.active || !state.context || !state.tracks[state.selected]) return;
+
+            stopAudio();
+
+            var gen = state.generation;
+            state.running = true;
+            state.anchorVideo = Math.max(0, time || 0);
+            state.scheduledUntil = state.anchorVideo;
+
+            try {
+                await state.context.resume();
+            } catch (error) {
+                remember(error);
+                state.running = false;
+                return;
+            }
+
+            if (gen !== state.generation) return;
+
+            state.anchorCtx = state.context.currentTime + 0.06;
+
+            try {
+                state.sink = new state.tracks[state.selected].sinkClass(state.tracks[state.selected].track);
+            } catch (error) {
+                remember(error);
+                state.running = false;
+                return;
+            }
+
+            try {
+                state.iterator = state.sink.buffers(state.anchorVideo)[Symbol.asyncIterator]();
+            } catch (error) {
+                remember(error);
+                state.running = false;
+                return;
+            }
+
+            pump(gen, state.iterator);
+        }
+
+        function chooseTrackIndex(preferred) {
+            if (isFinite(preferred) && preferred >= 0 && preferred < state.tracks.length) return preferred;
+
+            if (state.meta && state.meta.audio && state.meta.audio.length) {
+                for (var i = 0; i < state.meta.audio.length && i < state.tracks.length; i++) {
+                    if (state.meta.audio[i] && state.meta.audio[i].default) return i;
+                }
+            }
+
+            return 0;
+        }
+
+        async function activate(preferredIndex) {
+            if (!CONFIG.audioSync || state.active || state.activating || state.destroyed) return;
+            if (!audioSyncSupported() || !state.url) {
+                remember('AudioSync недоступний у цьому середовищі');
+                return;
+            }
+
+            state.activating = true;
+            state.error = '';
+
+            try {
+                var modules = await loadAudioSyncModules();
+                if (state.destroyed) return;
+
+                var Input = modules.MB.Input;
+                var UrlSource = modules.MB.UrlSource;
+                var ALL_FORMATS = modules.MB.ALL_FORMATS;
+                var AudioBufferSink = modules.MB.AudioBufferSink;
+
+                var input = new Input({ formats: ALL_FORMATS, source: new UrlSource(state.url) });
+                state.input = input;
+                var list = await input.getAudioTracks();
+
+                if (!list.length) throw new Error('У контейнері немає аудіодоріжок');
+
+                var tracks = [];
+
+                for (var i = 0; i < list.length; i++) {
+                    var track = list[i];
+                    tracks.push({
+                        track: track,
+                        sinkClass: AudioBufferSink,
+                        codec: String(await track.getCodec() || ''),
+                        channels: await track.getNumberOfChannels(),
+                        sampleRate: await track.getSampleRate(),
+                        language: await track.getLanguageCode(),
+                        name: (await track.getName()) || '',
+                        canDecode: await track.canDecode()
+                    });
+                }
+
+                var index = chooseTrackIndex(preferredIndex);
+                var probeAt = Math.max(0, Math.min(video.currentTime || 0, Math.max(0, (video.duration || 0) - 0.1)));
+                if (!isFinite(probeAt)) probeAt = 0;
+
+                var probeSink = new AudioBufferSink(tracks[index].track);
+                var probe = await Promise.race([
+                    probeSink.getBuffer(probeAt),
+                    new Promise(function (resolve) { setTimeout(function () { resolve({ timeout: true }); }, 6000); })
+                ]);
+
+                if (!probe || probe.timeout || !probe.buffer || !probe.buffer.length) {
+                    throw new Error('AC-3/E-AC-3 decoder не підтвердив PCM');
+                }
+
+                if (state.destroyed) return;
+
+                var Ctx = window.AudioContext || window.webkitAudioContext;
+                var context = new Ctx();
+                await context.resume();
+
+                if (state.destroyed) {
+                    try { context.close(); } catch (e) { /* ignore */ }
+                    try { input.dispose(); } catch (e) { /* ignore */ }
+                    return;
+                }
+
+                if (context.state !== 'running') {
+                    throw new Error('AudioContext suspended: потрібен жест користувача');
+                }
+
+                state.input = input;
+                state.tracks = tracks;
+                state.selected = index;
+                state.context = context;
+                state.active = true;
+                state.failed = false;
+                state.activating = false;
+
+                video.muted = true;
+                emitReady();
+
+                if (!video.paused) await startAt(video.currentTime || 0);
+            } catch (error) {
+                state.active = false;
+                state.running = false;
+                state.activating = false;
+                state.failed = true;
+                video.muted = false;
+
+                if (state.input) {
+                    try { state.input.dispose(); } catch (e) { /* ignore */ }
+                    state.input = null;
+                }
+
+                state.tracks = [];
+                remember(error);
+                emitReady();
+            }
+        }
+
+        api.load = function (url) {
+            state.url = String(url || '');
+            base.load(state.url);
+
+            if (session && session.mediaMeta) api.setMediaMeta(session.mediaMeta);
+            else if (session && session.data && session.data.ffprobe) api.setMediaMeta(extractFfprobeMeta(session.data));
+        };
+
+        api.setMediaMeta = function (meta) {
+            state.meta = meta || null;
+
+            if (metaNeedsAudioSync(state.meta) && !state.active && !state.activating && !state.destroyed) {
+                activate(null);
+            }
+        };
+
+        api.play = function () {
+            base.play();
+
+            if (state.failed && metaNeedsAudioSync(state.meta) && !state.active && !state.activating) {
+                state.failed = false;
+                activate(state.selected);
+            }
+        };
+
+        api.pause = function () { base.pause(); };
+        api.toggle = function () { if (video.paused) api.play(); else api.pause(); };
+        api.seek = function (time) { base.seek(time); };
+        api.setRate = function (rate) { base.setRate(rate); };
+
+        api.capabilities = function () {
+            var caps = base.capabilities();
+            caps.audioTracks = !!(state.tracks.length ||
+                (state.meta && metaNeedsAudioSync(state.meta) && state.meta.audio && state.meta.audio.length));
+            return caps;
+        };
+
+        api.audioTracks = function () {
+            if (state.tracks.length) {
+                return state.tracks.map(function (track, index) {
+                    return {
+                        index: index,
+                        label: track.name || track.language || ('Доріжка ' + (index + 1)),
+                        title: track.name || '',
+                        language: track.language || '',
+                        codec: audioCodecLabel(track.codec),
+                        channels: audioChannelsLabel(track.channels),
+                        sampleRate: audioSampleRateLabel(track.sampleRate),
+                        enabled: index === state.selected
+                    };
+                });
+            }
+
+            if (state.meta && metaNeedsAudioSync(state.meta) && state.meta.audio && state.meta.audio.length) {
+                return state.meta.audio.map(function (track, index) {
+                    return {
+                        index: index,
+                        label: track.title || track.language || ('Доріжка ' + (index + 1)),
+                        title: track.title || '',
+                        language: track.language || '',
+                        codec: audioCodecLabel(track.codec),
+                        channels: audioChannelsLabel(track.channels),
+                        sampleRate: audioSampleRateLabel(track.sampleRate),
+                        enabled: index === state.selected
+                    };
+                });
+            }
+
+            return base.audioTracks();
+        };
+
+        api.selectAudio = function (index) {
+            var target = parseInt(index, 10);
+
+            if (state.active) {
+                if (!isFinite(target) || !state.tracks[target]) return false;
+                state.selected = target;
+                startAt(video.currentTime);
+                emitReady();
+                return true;
+            }
+
+            if (metaNeedsAudioSync(state.meta)) {
+                state.selected = isFinite(target) ? target : 0;
+                activate(state.selected);
+                return true;
+            }
+
+            return base.selectAudio(index);
+        };
+
+        api.audioDebug = function () {
+            var info = state.tracks[state.selected] || null;
+
+            return {
+                active: state.active,
+                videoEngine: 'HTML5',
+                audioEngine: state.active ? 'WASM + WebAudio' : 'HTML5',
+                codec: info ? audioCodecLabel(info.codec) : (state.meta && state.meta.audio && state.meta.audio[0] ? audioCodecLabel(state.meta.audio[0].codec) : ''),
+                channels: info ? audioChannelsLabel(info.channels) : '',
+                track: info ? (info.name || info.language || ('Доріжка ' + (state.selected + 1))) : '',
+                syncMs: isFinite(state.lastSyncMs) ? Math.round(state.lastSyncMs) : null,
+                audioBuffer: bufferAhead(),
+                decoded: state.decoded,
+                underruns: state.underruns,
+                resyncs: state.resyncs,
+                gaps: state.gaps,
+                overlaps: state.overlaps,
+                error: state.error
+            };
+        };
+
+        api.destroy = function () {
+            state.destroyed = true;
+            state.active = false;
+            state.activating = false;
+            state.running = false;
+
+            clearInterval(timer);
+
+            disposers.forEach(function (off) {
+                try { off(); } catch (error) { /* ignore */ }
+            });
+            disposers = [];
+
+            stopAudio();
+
+            if (state.context) {
+                try { state.context.close(); } catch (error) { /* ignore */ }
+                state.context = null;
+            }
+
+            if (state.input) {
+                try { state.input.dispose(); } catch (error) { /* ignore */ }
+                state.input = null;
+            }
+
+            state.tracks = [];
+            video.muted = false;
+            base.destroy();
+            api.el = null;
+        };
+
+        on('play', function () { if (state.active && !state.running) startAt(video.currentTime); });
+        on('pause', stopAudio);
+        on('waiting', stopAudio);
+        on('playing', function () { if (state.active && !state.running) startAt(video.currentTime); });
+        on('seeking', stopAudio);
+        on('seeked', function () { if (state.active && !video.paused) startAt(video.currentTime); });
+        on('ratechange', function () { if (state.active && !video.paused) startAt(video.currentTime); });
+        on('ended', stopAudio);
+
+        timer = setInterval(function () {
+            if (!state.active || state.destroyed || video.paused) return;
+
+            var at = activeAudioTime();
+            state.lastAudioTime = at;
+
+            if (isFinite(at)) {
+                state.lastSyncMs = (at - (video.currentTime || 0)) * 1000;
+
+                if (Math.abs(state.lastSyncMs) > CONFIG.audioSyncResyncMs) {
+                    var now = Date.now();
+                    if (now - state.lastResyncAt > 1500) {
+                        state.lastResyncAt = now;
+                        state.resyncs++;
+                        startAt(video.currentTime);
+                    }
+                }
+            } else if (state.scheduledUntil > 0 && state.scheduledUntil < (video.currentTime || 0) - 0.15) {
+                state.underruns++;
+            }
+        }, 250);
+
+        return api;
+    }
+
+
+    /* =====================================================================
      * 5.0. Tizen AVPlay Engine
      * ---------------------------------------------------------------------
      * Використовується ЛИШЕ коли Lampa.Platform.is('tizen') І доступний
@@ -1325,6 +1899,7 @@
     var EngineFactory = {
         engines: {
             html5: Html5Engine,
+            'audio-sync': AudioSyncEngine,
             'tizen-avplay': TizenAvplayEngine
         },
 
@@ -1340,9 +1915,17 @@
 
         create: function (hooks, session, forcedId) {
             var id = forcedId || EngineFactory.platformId(session);
+
+            // AudioSync � ���� ��� torrent-������ �� �� � WebAudio/WASM.
+            // ��������� HTML5 �� ���������; AVPlay/Tizen �� �������������.
+            if (!forcedId && id === 'html5' && CONFIG.audioSync &&
+                audioSyncWanted(session) && audioSyncSupported()) {
+                id = 'audio-sync';
+            }
+
             var factory = EngineFactory.engines[id] || Html5Engine;
 
-            var engine = factory(hooks);
+            var engine = factory(hooks, session);
 
             log('engine created:', engine.name || id);
 
@@ -1440,6 +2023,17 @@
                 '<div class="vlc-debug__row"><span>ШВИДКІСТЬ ЗАВАНТАЖЕННЯ</span><b data-d="download">Н/Д</b></div>',
                 '<div class="vlc-debug__row vlc-debug__row--wide"><span>ФОРМАТ ВІДЕО</span><b data-d="video-format">Н/Д</b></div>',
                 '<div class="vlc-debug__row vlc-debug__row--wide"><span>АУДІОДОРІЖКИ</span><b data-d="audio-tracks">Н/Д</b></div>',
+                '<div class="vlc-debug__row"><span>ВІДЕОРУШІЙ</span><b data-d="video-engine">Н/Д</b></div>',
+                '<div class="vlc-debug__row"><span>АУДІОРУШІЙ</span><b data-d="audio-engine">Н/Д</b></div>',
+                '<div class="vlc-debug__row"><span>ВІДЕОКОДЕК</span><b data-d="video-codec">Н/Д</b></div>',
+                '<div class="vlc-debug__row"><span>АУДІОКОДЕК</span><b data-d="audio-codec">Н/Д</b></div>',
+                '<div class="vlc-debug__row"><span>АКТИВНА ДОРІЖКА</span><b data-d="active-audio">Н/Д</b></div>',
+                '<div class="vlc-debug__row"><span>СИНХРОНІЗАЦІЯ</span><b data-d="sync">Н/Д</b></div>',
+                '<div class="vlc-debug__row"><span>АУДІОБУФЕР</span><b data-d="audio-buffer">Н/Д</b></div>',
+                '<div class="vlc-debug__row"><span>PCM-ФРАГМЕНТИ</span><b data-d="pcm">Н/Д</b></div>',
+                '<div class="vlc-debug__row"><span>UNDERRUNS</span><b data-d="underruns">Н/Д</b></div>',
+                '<div class="vlc-debug__row"><span>RESYNCS</span><b data-d="resyncs">Н/Д</b></div>',
+                '<div class="vlc-debug__row"><span>АУДІО ПОМИЛКА</span><b data-d="audio-error">—</b></div>',
                 '<div class="vlc-debug__row"><span>БУФЕР</span><b data-d="buffer">Н/Д</b></div>',
                 '<div class="vlc-debug__row"><span>РУШІЙ</span><b data-d="engine">HTML5</b></div>',
                 '<div class="vlc-debug__row"><span>ОСТАННЯ ПОМИЛКА</span><b data-d="error">—</b></div>',
@@ -2327,6 +2921,11 @@
                 s.mediaMeta = meta;
                 s.audioInfoDirty = true;
                 dbg(s, 'event', 'Метадані TorrServer отримано');
+
+                if (s.engine && typeof s.engine.setMediaMeta === 'function') {
+                    safe(function () { s.engine.setMediaMeta(meta); });
+                }
+
                 refreshDebug(s);
 
                 if (s.ui && s.ui.isAudioOpen()) refreshAudioPanel(s);
@@ -2436,6 +3035,7 @@
                 mediaMeta: extractFfprobeMeta(data),
                 audioInfo: '',
                 audioInfoDirty: true,
+                audioError: '',
                 probeStarted: false
             };
 
@@ -2473,6 +3073,21 @@
                 onAutoplayBlocked: function () {
                     if (s.ui) s.ui.setBigPlay(true);
                     dbg(s, 'event', 'Автовідтворення заблоковано браузером');
+                },
+                onAudioReady: function (info) {
+                    if (!s || s.destroying) return;
+                    s.audioInfoDirty = true;
+                    if (s.ui && s.ui.isAudioOpen()) refreshAudioPanel(s);
+                    refreshDebug(s);
+                    dbg(s, 'event', info && info.active ? 'AudioSync: аудіо активне' : 'AudioSync: очікування/помилка');
+                },
+                onAudioError: function (message) {
+                    if (!s || s.destroying) return;
+                    s.audioError = String(message || '');
+                    s.audioInfoDirty = true;
+                    if (s.ui && s.ui.isAudioOpen()) refreshAudioPanel(s);
+                    refreshDebug(s);
+                    dbg(s, 'event', 'AudioSync: ' + (message || 'невідома помилка'));
                 }
             };
 
@@ -2640,6 +3255,36 @@
             }
 
             s.debug.set('audio-tracks', s.audioInfo || 'Н/Д');
+
+            var audioDebug = null;
+            try {
+                if (typeof s.engine.audioDebug === 'function') audioDebug = s.engine.audioDebug();
+            } catch (audioError) {
+                audioDebug = null;
+            }
+
+            var mediaInfo = engineMediaInfo(s) || {};
+            var videoEngine = audioDebug && audioDebug.videoEngine
+                ? audioDebug.videoEngine
+                : (s.engine.name === 'Tizen AVPlay' ? 'Tizen AVPlay' : 'HTML5');
+            var audioEngine = audioDebug && audioDebug.audioEngine
+                ? audioDebug.audioEngine
+                : (audioDebug && audioDebug.active ? 'WASM + WebAudio' : 'HTML5');
+
+            s.debug.set('engine', s.engine.name || 'Н/Д');
+            s.debug.set('video-engine', videoEngine);
+            s.debug.set('audio-engine', audioEngine);
+            s.debug.set('video-codec', (s.mediaMeta && s.mediaMeta.codec) || mediaInfo.codec || 'Н/Д');
+            s.debug.set('audio-codec', (audioDebug && audioDebug.codec) || 'Н/Д');
+            s.debug.set('active-audio', (audioDebug && audioDebug.track) || 'Н/Д');
+            s.debug.set('sync', (audioDebug && audioDebug.syncMs !== null && isFinite(audioDebug.syncMs))
+                ? (Math.round(audioDebug.syncMs) + ' мс') : 'Н/Д');
+            s.debug.set('audio-buffer', (audioDebug && audioDebug.active)
+                ? ((audioDebug.audioBuffer || 0).toFixed(1) + ' с') : 'Н/Д');
+            s.debug.set('pcm', (audioDebug && audioDebug.active) ? (audioDebug.decoded || 0) : 'Н/Д');
+            s.debug.set('underruns', (audioDebug && audioDebug.active) ? (audioDebug.underruns || 0) : 'Н/Д');
+            s.debug.set('resyncs', (audioDebug && audioDebug.active) ? (audioDebug.resyncs || 0) : 'Н/Д');
+            s.debug.set('audio-error', (s.audioError || (audioDebug && audioDebug.error) || '—'));
         } catch (e) {
             warn('debug refresh failed:', e && e.message ? e.message : e);
         }
@@ -3072,7 +3717,9 @@
             }
 
             s.ui.renderAudio(metaViews);
-            s.ui.setAudioStatus('Показано метадані TorrServer. Перемикання в цьому рушії недоступне: браузер не надає audioTracks.', false);
+            s.ui.setAudioStatus(s.audioError
+                ? ('AudioSync: ' + s.audioError)
+                : 'Показано метадані TorrServer. Перемикання в цьому рушії недоступне: браузер не надає audioTracks.', !!s.audioError);
             return;
         }
 
@@ -3104,6 +3751,8 @@
         } else if (views.length) {
             s.ui.setAudioStatus('Поточна аудіодоріжка не визначена.', false);
         }
+
+        if (s.audioError) s.ui.setAudioStatus('AudioSync: ' + s.audioError, true);
     }
 
     function selectAudioTrack(s, index) {
@@ -3664,6 +4313,9 @@
             resolveUrl: resolveUrl,
             EngineFactory: EngineFactory,
             Html5Engine: Html5Engine,
+            AudioSyncEngine: AudioSyncEngine,
+            audioSyncSupported: audioSyncSupported,
+            audioSyncWanted: audioSyncWanted,
             TizenAvplayEngine: TizenAvplayEngine,
             isAvplayAvailable: isAvplayAvailable,
             fallbackToHtml5: fallbackToHtml5,

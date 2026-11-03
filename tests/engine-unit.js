@@ -166,7 +166,30 @@ const internals = api && api._internals;
 check('Плагін ініціалізовано', !!(api && api.isReady()), api ? api.version : 'no api');
 check('EngineFactory доступний', !!(internals && internals.EngineFactory));
 check('Html5Engine доступний', typeof (internals && internals.Html5Engine) === 'function');
+check('AudioSyncEngine доступний', typeof (internals && internals.AudioSyncEngine) === 'function');
 check('ENGINE_CONTRACT — масив', Array.isArray(internals && internals.ENGINE_CONTRACT));
+
+/* ---------- AudioSync: вибір для torrent + WebAudio ---------- */
+var savedAudioContext = global.window.AudioContext;
+global.window.AudioContext = function () {
+    this.state = 'running';
+    this.resume = function () { return Promise.resolve(); };
+    this.close = function () { return Promise.resolve(); };
+    this.createBufferSource = function () { return {}; };
+    this.currentTime = 0;
+    this.destination = {};
+};
+
+var audioSession = { data: { torrent_hash: 'abc' }, mediaMeta: null };
+var audioEngine = internals.EngineFactory.create({}, audioSession);
+check('AudioSync обрано для torrent у WebAudio-середовищі', audioEngine.name === 'HTML5 + AudioSync', audioEngine.name);
+check('AudioSync має audioDebug', audioEngine.audioDebug() && audioEngine.audioDebug().active === false);
+check('AudioSync не активний без метаданих', audioEngine.audioDebug().audioEngine === 'HTML5');
+
+var forcedHtml5 = internals.EngineFactory.create({}, audioSession, 'html5');
+check('Примусовий html5 не перекривається AudioSync', forcedHtml5.name === 'HTML5', forcedHtml5.name);
+
+global.window.AudioContext = savedAudioContext;
 
 /* ---------- Створення рушія ---------- */
 

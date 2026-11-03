@@ -2,6 +2,24 @@
 
 Усі помітні зміни проєкту. Формат — стислий, без вигаданих версій і дат.
 
+## Етап 6.4.3 — AudioSyncEngine (без зміни версії)
+
+### Додано
+
+- `AudioSyncEngine` для torrent-джерел: HTML5 `<video muted>` + Mediabunny + WASM AC-3/E-AC-3 + WebAudio;
+- автоматичний вибір AudioSync лише для torrent на ПК з WebAudio/WASM; Tizen AVPlay не змінюється;
+- синхронізація з `video.currentTime`, Play/Pause/Seek, перемикання аудіодоріжок без перезапуску відео;
+- downmix 5.1 → stereo засобами WebAudio;
+- Debug Panel: відео/аудіорушій, кодеки, активна доріжка, sync, аудіобуфер, PCM-фрагменти, underruns, resyncs, помилка;
+- ліниве завантаження `vendor/mediabunny.min.mjs` + `vendor/mediabunny-ac3.min.mjs` (~1,9 МБ).
+
+### Обмеження
+
+- AudioSync перевірено у Chrome та Edge (Chromium) у локальному Lampa-подібному harness; реальна Lampa/TV не тестувалися;
+- при CSP/мережевій помилці vendor-модулів AC-3/E-AC-3 звуку не буде;
+- DTS і повне перемикання доріжок у нативному HTML5 не реалізовані;
+- реальний TorrServer з авторизацією та ручне Lampa-тестування ще попереду.
+
 ## v0.6.0 — 2026-11-02
 
 ### Додано
