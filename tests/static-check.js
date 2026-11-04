@@ -73,6 +73,30 @@ check('Vendor Mediabunny присутній', fs.existsSync(path.join(__dirname,
 check('Vendor AC3 присутній', fs.existsSync(path.join(__dirname, '..', 'vendor', 'mediabunny-ac3.min.mjs')) &&
     fs.statSync(path.join(__dirname, '..', 'vendor', 'mediabunny-ac3.min.mjs')).size > 1000000);
 check('AudioSync debug-поля', /data-d="audio-engine"/.test(src) && /data-d="sync"/.test(src) && /data-d="pcm"/.test(src));
+check('AudioSync fallback/watchdog', /function handleAudioFailure/.test(src) && /function fallbackToHtml5/.test(src) &&
+    /statechange/.test(src) && /visibilitychange/.test(src));
+check('AudioSync safe unmute', /video\.muted = false/.test(src) && /recoveryAttempted/.test(src));
+check('AudioSync notice', /onAudioFallback/.test(src) && /\.vlc-notice/.test(src) && /notify: notify/.test(src));
+check('AudioSync seek state machine', /function requestStartAt/.test(src) && /startRequestId/.test(src) &&
+    /seekActive/.test(src) && /pendingAudioSelection/.test(src));
+check('AudioSync track prepare-before-commit', /function prepareTrack/.test(src) && /audioRequestId/.test(src) &&
+    /prepared && prepared\.sink/.test(src));
+check('AudioSync underrun recovery', /function isUnderrun/.test(src) && /attemptUnderrunRecovery/.test(src) &&
+    /AUDIO_UNDERRUN_GRACE_MS/.test(src) && /underrunRecoveryFailures/.test(src));
+check('AudioSync HTTP diagnostics/retry', /function audioFetch/.test(src) && /lastHttpStatus/.test(src) &&
+    /rangeRequests/.test(src) && /classifyAudioError/.test(src));
+check('TorrServer /ffp state machine', /probeState/.test(src) && /probeAttempts/.test(src) &&
+    /probeToken/.test(src) && /probeTimer/.test(src));
+check('Developer Mode: Storage key/default', /vlc_developer_mode/.test(src) &&
+    /function readDeveloperMode/.test(src) && /debugPanel: false/.test(src));
+check('Developer Mode: динамічна панель', /function enableDebug/.test(src) && /function disableDebug/.test(src) &&
+    /createDebugPanel\(s\.ui\.root\)/.test(src) && /debugRefreshMs/.test(src));
+check('Developer Mode: перемикач у меню', /data-act="developer"/.test(src) &&
+    /vlc-settings__dev/.test(src) && /setDeveloperMode/.test(src));
+check('H1: обмежений retry UrlSource', /getRetryDelay: audioRetryDelay/.test(src) &&
+    /function audioRetryDelay/.test(src) && /transportRetries/.test(src));
+check('H2: єдиний шлях preparePendingSelection', /function preparePendingSelection/.test(src) &&
+    /return preparePendingSelection\(\)/.test(src) && !/state\.selected = state\.pendingAudioSelection/.test(src));
 check('AudioSync не активується для Tizen', /tizen-avplay/.test(src) && /audioSyncWanted/.test(src));
 check('Отримання та перемикання аудіодоріжок', /function refreshAudioPanel/.test(src) && /function selectAudioTrack/.test(src));
 

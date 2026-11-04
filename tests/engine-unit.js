@@ -185,6 +185,24 @@ var audioEngine = internals.EngineFactory.create({}, audioSession);
 check('AudioSync обрано для torrent у WebAudio-середовищі', audioEngine.name === 'HTML5 + AudioSync', audioEngine.name);
 check('AudioSync має audioDebug', audioEngine.audioDebug() && audioEngine.audioDebug().active === false);
 check('AudioSync не активний без метаданих', audioEngine.audioDebug().audioEngine === 'HTML5');
+check('AudioSync має watchdog-стан', audioEngine.audioDebug().contextState === 'none' &&
+    audioEngine.audioDebug().activeSources === 0 &&
+    audioEngine.audioDebug().fallback === false &&
+    audioEngine.audioDebug().recoveryAttempted === false);
+check('AudioSync має seek/track-стан', audioEngine.audioDebug().pendingAudioSelection === null &&
+    audioEngine.audioDebug().seekActive === false &&
+    audioEngine.audioDebug().startRequestId === 0);
+check('AudioSync не має зайвих sink/iterator', audioEngine.audioDebug().sinkCount === 0 &&
+    audioEngine.audioDebug().iteratorCount === 0);
+check('AudioSync underrun-лічильники', audioEngine.audioDebug().underruns === 0 &&
+    audioEngine.audioDebug().underrunAttempts === 0 &&
+    audioEngine.audioDebug().underrunSuccess === 0 &&
+    audioEngine.audioDebug().underrunFailures === 0);
+check('AudioSync HTTP-діагностика', audioEngine.audioDebug().rangeRequests === 0 &&
+    audioEngine.audioDebug().lastHttpStatus === 0 &&
+    audioEngine.audioDebug().errorKind === '');
+check('AudioSync H1/H2 стан', audioEngine.audioDebug().transportRetries === 0 &&
+    audioEngine.audioDebug().preparing === false);
 
 var forcedHtml5 = internals.EngineFactory.create({}, audioSession, 'html5');
 check('Примусовий html5 не перекривається AudioSync', forcedHtml5.name === 'HTML5', forcedHtml5.name);
@@ -412,6 +430,45 @@ check('TorrServer /ffp: контейнер/кодек', probeSession.mediaMeta &
 check('TorrServer /ffp: аудіодоріжка AC-3', probeSession.mediaMeta && probeSession.mediaMeta.audio[0].codec === 'AC-3' &&
     probeSession.mediaMeta.audio[0].language === 'uk', JSON.stringify(probeSession.mediaMeta && probeSession.mediaMeta.audio));
 
+/* /ffp: перша помилка → одна відкладена повторна спроба → success */
+var savedSetTimeout = global.setTimeout;
+var retryCallbacks = [];
+global.setTimeout = function (fn, ms) {
+    if (ms >= 500) {
+        retryCallbacks.push(fn);
+        return 1;
+    }
+    return savedSetTimeout(fn, ms);
+};
+
+var probeAttempts = 0;
+global.window.Lampa.Reguest = function () {
+    this.timeout = function () {};
+    this.silent = function (url, success, failure) {
+        probeAttempts++;
+        if (probeAttempts === 1) {
+            failure({ status: 503 });
+            return;
+        }
+        success({
+            format: { format_name: 'matroska,webm' },
+            streams: [{ codec_type: 'video', codec_name: 'h264', width: 1280, height: 720, r_frame_rate: '25/1' }]
+        });
+    };
+};
+
+var retrySession = { data: { torrent_hash: 'retry', id: 4 }, destroying: false, mediaMeta: null, debug: null, ui: null };
+internals.probeTorrentMetadata(retrySession);
+check('/ffp: перша спроба error', retrySession.probeState === 'error' && retrySession.probeAttempts === 1 &&
+    probeAttempts === 1, JSON.stringify({ state: retrySession.probeState, attempts: retrySession.probeAttempts }));
+check('/ffp: retry заплановано', retryCallbacks.length === 1);
+
+if (retryCallbacks[0]) retryCallbacks[0]();
+check('/ffp: retry success', retrySession.probeState === 'success' && retrySession.mediaMeta &&
+    retrySession.mediaMeta.codec === 'H.264' && probeAttempts === 2,
+    JSON.stringify({ state: retrySession.probeState, attempts: probeAttempts }));
+
+global.setTimeout = savedSetTimeout;
 global.window.Lampa.Torserver = savedTorserver;
 global.window.Lampa.Reguest = savedReguest;
 check('formatBytesPerSecond: КБ/с', internals.formatBytesPerSecond(500 * 1024) === '500 КБ/с');

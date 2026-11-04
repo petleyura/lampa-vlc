@@ -228,6 +228,7 @@
 
                 /* ---------- 6-7. Позитивний сценарій ---------- */
                 Lampa.Storage.set('player', 'vlc');
+                Lampa.Storage.set('vlc_developer_mode', 'true');
                 var url = 'http://192.168.1.10:8090/stream/Movie.2024.mkv?link=abc&index=3&preload';
                 var aborted = fireCreate({ url: url, title: 'Тестовий фільм', card: { title: 'Тестовий фільм' } });
                 await wait(50);
@@ -334,6 +335,8 @@
                 line(!!document.querySelector('[data-act="audio"]') &&
                     document.querySelector('[data-act="audio"]').textContent.indexOf('АУДІО') > -1,
                     '24a. Є видима кнопка «АУДІО»');
+                line(!!document.querySelector('.vlc-notice'),
+                    '24a2. Є контейнер повідомлення про fallback');
 
                 click('[data-act="audio"]');
                 await wait(30);
@@ -439,6 +442,53 @@
 
                 /* ---------- 35. Без URL ---------- */
                 Lampa.Storage.set('player', 'vlc');
+                /* ---------- 34h-34l. Developer Mode ---------- */
+                Lampa.Storage.set('player', 'vlc');
+                Lampa.Storage.set('vlc_developer_mode', 'false');
+                var abortOff = fireCreate({ url: 'http://example.test/off.mp4', title: 'Off' });
+                await wait(60);
+                var offSession = api.session();
+                line(abortOff === true && !!rootEl() && !panelEl() &&
+                    offSession && offSession.debugTimer === null,
+                    '34h. Developer Mode off — панель і timer відсутні',
+                    offSession ? String(offSession.debugTimer) : 'no session');
+                key(27);
+                await wait(60);
+
+                Lampa.Storage.set('vlc_developer_mode', 'true');
+                var abortOn = fireCreate({ url: 'http://example.test/on.mp4', title: 'On' });
+                await wait(60);
+                var onSession = api.session();
+                line(abortOn === true && !!panelEl() && onSession && typeof onSession.debugTimer === 'number',
+                    '34i. Developer Mode on — панель і timer створені');
+
+                if (onSession && onSession.setDeveloperMode) {
+                    click('[data-act="settings"]');
+                    await wait(30);
+                    click('[data-act="developer"]');
+                    await wait(40);
+                    line(!panelEl() && onSession.debugTimer === null,
+                        '34j. Вимкнення через меню видаляє панель і timer');
+
+                    click('[data-act="developer"]');
+                    await wait(40);
+                    line(!!panelEl() && document.querySelectorAll('.vlc-debug').length === 1 &&
+                        typeof onSession.debugTimer === 'number',
+                        '34k. Повторне ввімкнення через меню без дублікатів',
+                        document.querySelectorAll('.vlc-debug').length);
+                }
+                key(27);
+                await wait(60);
+
+                Lampa.Storage.set('player', 'vlc');
+                Lampa.Storage.set('vlc_developer_mode', 'false');
+                var abortPersist = fireCreate({ url: 'http://example.test/persist.mp4', title: 'Persist' });
+                await wait(60);
+                line(abortPersist === true && !panelEl(),
+                    '34l. Вимкнений режим зберігається після повторного відкриття');
+                key(27);
+                await wait(60);
+
                 var abortNoUrl = fireCreate({ title: 'Без URL' });
                 await wait(30);
                 line(abortNoUrl === false && !rootEl(), '35. Без URL керування залишається Lampa');
